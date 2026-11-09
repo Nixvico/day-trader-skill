@@ -5,8 +5,12 @@
                              today's move, the VIX, which sectors lead and lag,
                              and one light: gruen / gelb / rot
   markt.py radar             fresh SEC 8-K filings of listed companies that move
-                             stocks (earnings, deals, CEO changes, bankruptcy ...)
-                             and today's Nasdaq trading halts, newest first
+                             stocks (earnings, deals, CEO changes, bankruptcy ...),
+                             today's Nasdaq trading halts, company press releases
+                             (Business Wire, PR Newswire), market headlines
+                             (MarketWatch, Google News), what is being talked
+                             about (StockTwits trending, r/wallstreetbets) and the
+                             Fed's press releases
   markt.py termine --from F  market-wide dates (Fed, CPI, jobs report) from a JSON
                              list, the ones in the next days
 
@@ -196,7 +200,7 @@ def parse_halts(text, day=None):
     return out
 
 
-def radar(minutes=180, tickers=None, strong_only=True, get8k=None, gethalts=None, getsec=None):
+def radar(minutes=180, tickers=None, strong_only=True, get8k=None, gethalts=None, getsec=None, extra=True):
     now = E.utc_now()
     feed = parse_8k_feed((get8k or _sec_get)(
         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&count=100&output=atom"))
@@ -222,7 +226,161 @@ def radar(minutes=180, tickers=None, strong_only=True, get8k=None, gethalts=None
     if want:
         halts = [h for h in halts if h["symbol"] in want]
     halts = [h for h in halts if not h["symbol"].endswith(("W", "R", "U")) or len(h["symbol"]) <= 4]
-    return {"zeit": E.to_eastern(now).strftime("%Y-%m-%d %H:%M ET"), "meldungen": filings, "stopps": halts}
+    out = {"zeit": E.to_eastern(now).strftime("%Y-%m-%d %H:%M ET"), "meldungen": filings, "stopps": halts}
+    if extra:
+        known = set(_TICKERS.values()) or None
+        out["pressemitteilungen"] = press_releases(minutes, now)
+        if want:
+            out["pressemitteilungen"] = [p for p in out["pressemitteilungen"] if set(p["tickers"]) & want]
+        out["schlagzeilen"] = headlines(max(minutes, 12 * 60), now)
+        out["im_gespraech"] = talked_about(now, known)
+        out["notenbank"] = fed_news(3, now)
+    return out
+
+
+# ---------------------------------------------------------------- more sources
+
+BROWSER = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+FEEDS = {
+    "businesswire": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeGVtRWA==",
+    "prnewswire": "https://www.prnewswire.com/rss/news-releases-list.rss",
+    "marketwatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "googlenews": "https://news.google.com/rss/search?q=stock+market+today&hl=en-US&gl=US&ceid=US:en",
+    "fed": "https://www.federalreserve.gov/feeds/press_all.xml",
+    "wsb": "https://www.reddit.com/r/wallstreetbets/.rss",
+    "stocktwits": "https://api.stocktwits.com/api/2/trending/symbols.json",
+}
+EXCHANGE_TICKER = re.compile(r"\((?:NASDAQ|Nasdaq|NYSE(?: American| Arca)?|Cboe|OTCQX|OTCQB|TSX)\s*:\s*([A-Z][A-Z.]{0,5})\)")
+SPAM = re.compile(r"law firm|class action|investor alert|shareholder alert|investigation|lawsuit|deadline|"
+                  r"rosen|levi & korsinsky|pomerantz|bronstein|faruqi|schall|glancy|kessler topaz|bragar", re.I)
+KINDS = [("Zahlen", re.compile(r"results|reports? (first|second|third|fourth|q[1-4]|fiscal|quarter)|earnings", re.I)),
+         ("Übernahme", re.compile(r"acqui|merger|to be acquired|definitive agreement|tender offer", re.I)),
+         ("FDA", re.compile(r"FDA|approval|clinical|phase [123]", re.I)),
+         ("Ausblick", re.compile(r"guidance|outlook|raises|lowers|forecast", re.I)),
+         ("Kapital", re.compile(r"offering|private placement|buyback|repurchase|dividend", re.I))]
+NOT_TICKERS = set("A I AI ALL AM AN AND ARE AS AT ATH BE BIG BUY BY CEO CFO CPI DD DOW EOD EPS ETF FBI FDA FED FOMC FOR "
+                  "GDP GO HAS HE HOLD I IF IN IPO IS IT ITM LOL MY NEW NO NOT NOW OF ON ONE OR OTM OUT PM PUT PUTS SEC "
+                  "SO THE TO UP US USA WE WSB YOLO YOU CALL CALLS RIP OP IMO TL DR TLDR GDP".split())
+
+
+def rss_items(text):
+    """RSS or Atom -> [{title, link, time (naive UTC or None), text}]."""
+    out = []
+    for b in re.findall(r"<(?:item|entry)\b(.*?)</(?:item|entry)>", text, re.S):
+        def g(pat):
+            m = re.search(pat, b, re.S)
+            if not m:
+                return ""
+            v = re.sub(r"<!\[CDATA\[|\]\]>", "", m.group(1))
+            return html.unescape(re.sub(r"<[^>]+>", " ", html.unescape(v))).strip()
+        link = re.search(r"<link[^>]*href=\"([^\"]+)\"", b) or re.search(r"<link>(.*?)</link>", b, re.S)
+        when = g(r"<(?:pubDate|updated|published)>(.*?)</")
+        out.append({"title": " ".join(g(r"<title[^>]*>(.*?)</title>").split()), "link": html.unescape(link.group(1).strip()) if link else "",
+                    "time": _when(when), "text": " ".join(g(r"<(?:description|summary|content)[^>]*>(.*?)</").split())[:400]})
+    return out
+
+
+def _when(s):
+    import email.utils
+    if not s:
+        return None
+    try:
+        d = email.utils.parsedate_to_datetime(s)
+    except (TypeError, ValueError):
+        try:
+            d = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if d.tzinfo is None:
+        return d
+    return d.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def _fresh(items, minutes, now):
+    return [i for i in items if i["time"] and (now - i["time"]).total_seconds() <= minutes * 60]
+
+
+def _kind(text):
+    return [k for k, rx in KINDS if rx.search(text)]
+
+
+def press_releases(minutes, now, get=None):
+    """Company press releases with a ticker, without the law-firm advertising."""
+    get = get or (lambda u: _get_as(u, BROWSER))
+    out = []
+    for src, name in (("businesswire", "Business Wire"), ("prnewswire", "PR Newswire")):
+        try:
+            items = rss_items(get(FEEDS[src]))
+        except Exception:
+            continue
+        for i in _fresh(items, minutes, now):
+            blob = i["title"] + " " + i["text"]
+            if SPAM.search(i["title"]):
+                continue
+            tks = sorted(set(EXCHANGE_TICKER.findall(blob)) |
+                         set(t.upper() for t in re.findall(r"BUSINESS WIRE\)-+\s*((?:\$[a-z.]{1,6}\s*)+)", blob) for t in re.findall(r"[a-z.]+", t)))
+            if not tks:
+                continue
+            out.append({"zeit": E.to_eastern(i["time"]).strftime("%H:%M"), "tickers": tks, "titel": i["title"][:160],
+                        "art": _kind(blob), "quelle": name, "link": i["link"]})
+    out.sort(key=lambda x: x["zeit"], reverse=True)
+    return out
+
+
+def headlines(minutes, now, get=None):
+    get = get or (lambda u: _get_as(u, BROWSER))
+    out = []
+    for src, name in (("marketwatch", "MarketWatch"), ("googlenews", "Google News")):
+        try:
+            items = rss_items(get(FEEDS[src]))
+        except Exception:
+            continue
+        for i in _fresh(items, minutes, now)[:10]:
+            out.append({"zeit": E.to_eastern(i["time"]).strftime("%d.%m. %H:%M"), "titel": i["title"][:180],
+                        "quelle": name, "link": i["link"]})
+    return out
+
+
+def talked_about(now, known=None, get=None, getjson=None):
+    """StockTwits trending and the tickers r/wallstreetbets titles name most in the last 24 hours."""
+    get = get or (lambda u: _get_as(u, BROWSER))
+    out = {"stocktwits": [], "wsb": []}
+    try:
+        data = json.loads((getjson or get)(FEEDS["stocktwits"]))
+        for s_ in (data.get("symbols") or [])[:15]:
+            out["stocktwits"].append({"ticker": s_.get("symbol"), "name": s_.get("title"),
+                                      "score": round(float(s_.get("trending_score") or 0), 1)})
+    except Exception:
+        pass
+    try:
+        items = _fresh(rss_items(get(FEEDS["wsb"])), 24 * 60, now)
+        counts = {}
+        for i in items:
+            words = set(re.findall(r"\$([A-Z]{1,5})\b", i["title"])) | set(re.findall(r"\b([A-Z]{2,5})\b", i["title"]))
+            for w in words:
+                if w in NOT_TICKERS or (known is not None and w not in known):
+                    continue
+                counts[w] = counts.get(w, 0) + 1
+        out["wsb"] = [{"ticker": t, "beitraege": n} for t, n in sorted(counts.items(), key=lambda x: -x[1])[:10]]
+    except Exception:
+        pass
+    return out
+
+
+def fed_news(days, now, get=None):
+    get = get or (lambda u: _get_as(u, BROWSER))
+    try:
+        items = rss_items(get(FEEDS["fed"]))
+    except Exception:
+        return []
+    return [{"zeit": E.to_eastern(i["time"]).strftime("%d.%m. %H:%M"), "titel": i["title"][:180], "link": i["link"]}
+            for i in _fresh(items, days * 24 * 60, now)[:5]]
+
+
+def _get_as(url, ua):
+    req = urllib.request.Request(url, headers={"User-Agent": ua})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode("utf-8-sig", "replace")
 
 
 # ---------------------------------------------------------------- dates
@@ -249,6 +407,7 @@ def main(argv=None):
     p.add_argument("--minutes", type=int, default=180, help="Meldungen der letzten N Minuten (180)")
     p.add_argument("--tickers", nargs="*", help="nur diese Ticker")
     p.add_argument("--alle", action="store_true", help="auch weniger wichtige 8-K-Punkte")
+    p.add_argument("--nur-sec", action="store_true", help="nur SEC und Handelsstopps, ohne die übrigen Quellen")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("termine")
     p.add_argument("--from", dest="from_file", required=True)
@@ -270,7 +429,7 @@ def main(argv=None):
                 print("Schwach: " + ", ".join("%s %s %%" % (b["branche"], K.de(b["heute_pct"])) for b in flop))
             return 0
         if a.cmd == "radar":
-            r = radar(a.minutes, a.tickers, not a.alle)
+            r = radar(a.minutes, a.tickers, not a.alle, extra=not a.nur_sec)
             if a.json:
                 print(json.dumps(r, indent=2, ensure_ascii=False))
                 return 0
@@ -279,6 +438,18 @@ def main(argv=None):
                 print("  %s  %-6s %s: %s" % (f["zeit"], f["ticker"], f["firma"][:40], f["was"]))
             if not r["meldungen"]:
                 print("  keine wichtigen 8-K-Meldungen")
+            for p in r.get("pressemitteilungen", [])[:15]:
+                print("  %s  %-12s %s%s" % (p["zeit"], ",".join(p["tickers"])[:12], p["titel"][:90],
+                                            (" [%s]" % ", ".join(p["art"])) if p["art"] else ""))
+            for h in r.get("schlagzeilen", [])[:8]:
+                print("  %s  %s: %s" % (h["zeit"], h["quelle"], h["titel"][:100]))
+            ig = r.get("im_gespraech") or {}
+            if ig.get("stocktwits"):
+                print("StockTwits gerade: " + ", ".join(s["ticker"] for s in ig["stocktwits"][:10]))
+            if ig.get("wsb"):
+                print("r/wallstreetbets (24 h): " + ", ".join("%s (%d)" % (w["ticker"], w["beitraege"]) for w in ig["wsb"]))
+            for f in r.get("notenbank", []):
+                print("  Fed %s: %s" % (f["zeit"], f["titel"][:100]))
             print("Handelsstopps heute (Nasdaq-Liste):")
             for h in r["stopps"][:40]:
                 print("  %s  %-6s %s%s" % (h["time"], h["symbol"], h["meaning"],

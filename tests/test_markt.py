@@ -82,13 +82,44 @@ class Radar(unittest.TestCase):
         orig = M.E.utc_now
         M.E.utc_now = lambda: datetime.datetime(2026, 11, 9, 22, 0)     # 17:00 ET
         try:
-            r = M.radar(120, None, True, get8k=lambda u: FEED, gethalts=lambda u: HALTS, getsec=sec)
+            r = M.radar(120, None, True, get8k=lambda u: FEED, gethalts=lambda u: HALTS, getsec=sec, extra=False)
         finally:
             M.E.utc_now = orig
             M._TICKERS.clear()
         self.assertEqual([f["ticker"] for f in r["meldungen"]], ["NKE"])   # fund has no ticker, QUI only 9.01
         self.assertEqual(r["meldungen"][0]["was"], "Wechsel im Management")
         self.assertEqual([h["symbol"] for h in r["stopps"]], ["ABCD"])
+
+
+PRN = """<rss><channel>
+<item><title>Rosen Law Firm Encourages NVE Corporation Investors to Inquire - NVEC</title><link>https://x/1</link>
+<pubDate>Mon, 9 Nov 2026 22:37:00 +0000</pubDate><description>(NASDAQ: NVEC)</description></item>
+<item><title>Solidion Technology (NASDAQ: STI) Reports Third Quarter Financial Results</title><link>https://x/2</link>
+<pubDate>Mon, 9 Nov 2026 22:36:00 +0000</pubDate><description>DALLAS /PRNewswire/</description></item>
+<item><title>Acme Corp to Acquire Widget Inc. (NYSE: WID)</title><link>https://x/3</link>
+<pubDate>Mon, 9 Nov 2026 10:00:00 +0000</pubDate><description>old</description></item>
+</channel></rss>"""
+
+WSB = """<feed><entry><title>NVDA puts are printing, YOLO on $ASTS</title><updated>2026-11-09T21:00:00+00:00</updated></entry>
+<entry><title>ASTS to the moon, DD inside</title><updated>2026-11-09T20:00:00+00:00</updated></entry>
+<entry><title>Old post about TSLA</title><updated>2026-11-01T20:00:00+00:00</updated></entry></feed>"""
+
+
+class Sources(unittest.TestCase):
+    NOW = datetime.datetime(2026, 11, 9, 23, 0)
+
+    def test_press_releases_skip_law_firms_and_old_items(self):
+        out = M.press_releases(120, self.NOW, get=lambda u: PRN if "prnewswire" in u else "<rss></rss>")
+        self.assertEqual([p["tickers"] for p in out], [["STI"]])
+        self.assertEqual(out[0]["art"], ["Zahlen"])
+        self.assertEqual(out[0]["zeit"], "17:36")
+
+    def test_wsb_counts_known_tickers(self):
+        st = json.dumps({"symbols": [{"symbol": "ASTS", "title": "AST SpaceMobile", "trending_score": 20.4}]})
+        out = M.talked_about(self.NOW, known={"NVDA", "ASTS", "TSLA"},
+                             get=lambda u: WSB, getjson=lambda u: st)
+        self.assertEqual(out["stocktwits"][0]["ticker"], "ASTS")
+        self.assertEqual(out["wsb"], [{"ticker": "ASTS", "beitraege": 2}, {"ticker": "NVDA", "beitraege": 1}])
 
 
 class Dates(unittest.TestCase):

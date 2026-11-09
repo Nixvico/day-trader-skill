@@ -116,7 +116,11 @@ python3 trader-kandidaten/markt.py termine --from termine.json   # Fed, Inflatio
   grün bei SPY über dem 20-Tage-Schnitt, höchstens -0,2 % heute und VIX unter 20; sonst gelb.
 - Radar: das SEC-Feed aller neuen 8-K-Meldungen (jede Minute aktuell), nur börsennotierte Firmen und nur
   Punkte, die Kurse bewegen (Zahlen, Deals, Chefwechsel, Insolvenz, Bilanzprobleme ...), dazu die
-  Handelsstopps der Nasdaq-Liste mit Grund (z. B. T1: Nachricht kommt gleich).
+  Handelsstopps der Nasdaq-Liste mit Grund (z. B. T1: Nachricht kommt gleich). Dazu, wenn erreichbar:
+  Pressemitteilungen mit Ticker (Business Wire, PR Newswire, ohne Anwalts-Werbung), Schlagzeilen
+  (MarketWatch, Google News), was gerade besprochen wird (StockTwits trending, r/wallstreetbets der
+  letzten 24 Stunden) und die Pressemitteilungen der Fed. `--nur-sec` lässt diese Quellen weg. Fällt eine
+  Quelle aus, fehlt nur ihr Teil.
 - Jedes Signal bekommt die Ampel (`markt`) und das relative Volumen der Ausbruchskerze (`vol_x`) mit ins
   Tagebuch. Beides ist eine Information, kein Filter, bis das Tagebuch zeigt, dass es einen Unterschied macht.
 
