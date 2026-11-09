@@ -235,6 +235,7 @@ def radar(minutes=180, tickers=None, strong_only=True, get8k=None, gethalts=None
         out["schlagzeilen"] = headlines(max(minutes, 12 * 60), now)
         out["im_gespraech"] = talked_about(now, known)
         out["notenbank"] = fed_news(3, now)
+    out["betroffen"] = affected(out)
     return out
 
 
@@ -253,9 +254,9 @@ FEEDS = {
 EXCHANGE_TICKER = re.compile(r"\((?:NASDAQ|Nasdaq|NYSE(?: American| Arca)?|Cboe|OTCQX|OTCQB|TSX)\s*:\s*([A-Z][A-Z.]{0,5})\)")
 SPAM = re.compile(r"law firm|class action|investor alert|shareholder alert|investigation|lawsuit|deadline|"
                   r"rosen|levi & korsinsky|pomerantz|bronstein|faruqi|schall|glancy|kessler topaz|bragar", re.I)
-KINDS = [("Zahlen", re.compile(r"results|reports? (first|second|third|fourth|q[1-4]|fiscal|quarter)|earnings", re.I)),
+KINDS = [("Zahlen", re.compile(r"\bresults\b|reports? (first|second|third|fourth|q[1-4]|fiscal|quarter)|earnings", re.I)),
          ("Übernahme", re.compile(r"acqui|merger|to be acquired|definitive agreement|tender offer", re.I)),
-         ("FDA", re.compile(r"FDA|approval|clinical|phase [123]", re.I)),
+         ("FDA", re.compile(r"\bFDA\b|approval|clinical|phase [123]", re.I)),
          ("Ausblick", re.compile(r"guidance|outlook|raises|lowers|forecast", re.I)),
          ("Kapital", re.compile(r"offering|private placement|buyback|repurchase|dividend", re.I))]
 NOT_TICKERS = set("A I AI ALL AM AN AND ARE AS AT ATH BE BIG BUY BY CEO CFO CPI DD DOW EOD EPS ETF FBI FDA FED FOMC FOR "
@@ -377,6 +378,132 @@ def fed_news(days, now, get=None):
             for i in _fresh(items, days * 24 * 60, now)[:5]]
 
 
+# ---------------------------------------------------------------- tendency
+
+# Keyword rules for the likely direction of a news item, -3 (strongly down) .. +3 (strongly up).
+# Order matters only for the reason text; all matching rules add up, the sum is clipped to -3..+3.
+TONE = [
+    (+3, "wird übernommen", re.compile(r"to be acquired|agrees? to be acquired|acquired by|take[- ]private|"
+                                       r"per share in cash|all-cash (deal|transaction)", re.I)),
+    (+2, "Zahlen besser als erwartet", re.compile(r"\bbeats?\b|tops? (estimates|expectations)|above (estimates|expectations)|"
+                                                   r"record (revenue|quarter|results)|beat and raise", re.I)),
+    (+2, "Ausblick angehoben", re.compile(r"raises? (its |full[- ]year |annual )?(guidance|outlook|forecast)|raised (guidance|outlook)", re.I)),
+    (+2, "Zulassung", re.compile(r"\bFDA (approv|clear)|approved by the FDA|receives? (FDA )?approval|granted approval", re.I)),
+    (+1, "Aktienrückkauf", re.compile(r"buyback|repurchase (program|authorization)", re.I)),
+    (+1, "Dividende erhöht", re.compile(r"(raises|increases|boosts) (its )?(quarterly )?dividend|dividend increase", re.I)),
+    (+1, "Auftrag / Partnerschaft", re.compile(r"\b(awarded|wins|secures|signs)\b.*\b(contract|agreement|order|deal)\b|partnership with|multi-year (agreement|contract|deal)", re.I)),
+    (+1, "Hochstufung", re.compile(r"\bupgrade[sd]?\b", re.I)),
+    (+1, "Kurs steigt", re.compile(r"\b(surges?|soars?|jumps?|rall(y|ies)|climbs?|spikes?)\b", re.I)),
+    (-1, "Kurs fällt", re.compile(r"\b(falls?(?! short)|drops?|slides?|slumps?|tumbles?|sinks?|plunges?|stock falls)\b", re.I)),
+    (-1, "Herabstufung", re.compile(r"\bdowngrade[sd]?\b", re.I)),
+    (-1, "Chef geht", re.compile(r"\b(resigns?|steps? down|departure of|to depart)\b", re.I)),
+    (-1, "Skandal / Rückruf / Ermittlung", re.compile(r"\brecall\b|subpoena|\bprobe\b|investigation by|scandal", re.I)),
+    (-2, "Zahlen schwächer als erwartet", re.compile(r"\bmiss(es|ed)?\b (estimates|expectations)|falls? short|below (estimates|expectations)", re.I)),
+    (-2, "Ausblick gesenkt", re.compile(r"(lowers|cuts|reduces|slashes) (its |full[- ]year |annual )?(guidance|outlook|forecast)", re.I)),
+    (-2, "neue Aktien (Verwässerung)", re.compile(r"(public|registered direct|underwritten|secondary) offering|private placement|"
+                                                  r"at-the-market|pricing of .*offering|proposed offering", re.I)),
+    (-2, "Börsennotiz gefährdet", re.compile(r"delist|non-?compliance|deficiency (notice|letter)|minimum bid", re.I)),
+    (-3, "Insolvenz", re.compile(r"bankruptcy|chapter 11|going concern", re.I)),
+    (-3, "Bilanz unzuverlässig", re.compile(r"restate|non-reliance", re.I)),
+    (-3, "Studie gescheitert", re.compile(r"(trial|study) (failed|did not meet|missed)|failed (trial|study)|"
+                                          r"discontinu(e|es|ed) (development|the program)|complete response letter", re.I)),
+]
+ITEM_TONE = {"1.03": (-3, "Insolvenz (8-K)"), "4.02": (-3, "Bilanz unzuverlässig (8-K)"), "3.01": (-2, "Börsennotiz gefährdet (8-K)"),
+             "2.06": (-2, "Wertberichtigung (8-K)"), "1.02": (-1, "Vertrag beendet (8-K)"), "2.05": (-1, "Stellenabbau (8-K)"),
+             "3.02": (-1, "neue Aktien (8-K)"), "2.02": (0, "Quartalszahlen, Richtung offen"),
+             "5.02": (0, "Wechsel im Management, Richtung offen"), "1.01": (0, "Vertrag / Deal, Richtung offen"),
+             "2.01": (0, "Übernahme / Verkauf abgeschlossen"), "5.01": (0, "Kontrollwechsel, Richtung offen")}
+HALT_TONE = {"H10": (-3, "SEC hat den Handel ausgesetzt"), "H11": (-2, "Regulatorische Bedenken"), "T12": (-1, "Börse will mehr Infos"),
+             "T1": (0, "Handelsstopp: Nachricht kommt"), "T2": (0, "Handelsstopp: Nachricht raus")}
+# Big names that headlines write without a ticker.
+ALIASES = {"nvidia": "NVDA", "apple": "AAPL", "microsoft": "MSFT", "amazon": "AMZN", "alphabet": "GOOGL", "google": "GOOGL",
+           "meta platforms": "META", "facebook": "META", "tesla": "TSLA", "netflix": "NFLX", "amd": "AMD", "broadcom": "AVGO",
+           "intel": "INTC", "qualcomm": "QCOM", "micron": "MU", "oracle": "ORCL", "salesforce": "CRM", "palantir": "PLTR",
+           "boeing": "BA", "walmart": "WMT", "costco": "COST", "disney": "DIS", "nike": "NKE", "pfizer": "PFE",
+           "moderna": "MRNA", "eli lilly": "LLY", "novo nordisk": "NVO", "jpmorgan": "JPM", "goldman sachs": "GS",
+           "bank of america": "BAC", "berkshire": "BRK.B", "exxon": "XOM", "chevron": "CVX", "uber": "UBER", "coinbase": "COIN",
+           "super micro": "SMCI", "arm holdings": "ARM", "taiwan semiconductor": "TSM", "tsmc": "TSM", "starbucks": "SBUX",
+           "mcdonald's": "MCD", "home depot": "HD", "unitedhealth": "UNH", "visa": "V", "mastercard": "MA", "paypal": "PYPL",
+           "shopify": "SHOP", "rivian": "RIVN", "lucid": "LCID", "ford": "F", "general motors": "GM", "ibm": "IBM", "cisco": "CSCO",
+           "adobe": "ADBE", "snowflake": "SNOW", "spotify": "SPOT", "airbnb": "ABNB", "robinhood": "HOOD"}
+
+
+def tone(text):
+    """Keyword score of one news text -> (score -3..3, [reasons])."""
+    score, why = 0, []
+    for pts, label, rx in TONE:
+        if rx.search(text):
+            score += pts
+            why.append(label)
+    return max(-3, min(3, score)), why
+
+
+def headline_tickers(text):
+    found = set(EXCHANGE_TICKER.findall(text)) | set(re.findall(r"\$([A-Z]{1,5})\b", text))
+    low = text.lower()
+    for name, tk in ALIASES.items():
+        if tk and re.search(r"(?<![a-z])" + re.escape(name) + r"(?![a-z])", low):
+            found.add(tk)
+    return found
+
+
+def affected(r):
+    """All stocks named by the news in a radar result, one row each with a likely direction.
+
+    -> [{ticker, tendenz -3..3, offen (direction unknown), gruende, meldungen: [{zeit, quelle, titel, link}]}],
+    strongest direction first. A guess from keywords, not a forecast."""
+    rows = {}
+
+    def add(tk, pts, why, zeit, quelle, titel, link, offen=False):
+        row = rows.setdefault(tk, {"ticker": tk, "summe": 0, "gruende": [], "meldungen": [], "offen": True})
+        row["summe"] += pts
+        for w in why:
+            if w not in row["gruende"]:
+                row["gruende"].append(w)
+        if not offen:
+            row["offen"] = False
+        row["meldungen"].append({"zeit": zeit, "quelle": quelle, "titel": titel, "link": link or ""})
+
+    for f in r.get("meldungen", []):
+        pts, why, open_ = 0, [], True
+        for i in f.get("items", []):
+            p, w = ITEM_TONE.get(i, (0, None))
+            if w:
+                pts += p
+                why.append(w)
+                open_ = open_ and p == 0
+        add(f["ticker"], pts, why, f["zeit"], "SEC 8-K", "%s: %s" % (f.get("firma", ""), f["was"]), f.get("link"), open_)
+    for h in r.get("stopps", []):
+        if h.get("code") in HALT_TONE:
+            p, w = HALT_TONE[h["code"]]
+            add(h["symbol"], p, [w], h.get("time", "")[:5], "Nasdaq", h.get("meaning", ""), "", p == 0)
+    for p in r.get("pressemitteilungen", []):
+        pts, why = tone(p["titel"])
+        if "Übernahme" in p.get("art", []) and not why:
+            why = ["Übernahme, Richtung offen (Käufer oder Ziel?)"]
+        for tk in p["tickers"]:
+            add(tk, pts, why, p["zeit"], p["quelle"], p["titel"], p.get("link"), pts == 0)
+    for h in r.get("schlagzeilen", []):
+        tks = headline_tickers(h["titel"])
+        if not tks:
+            continue
+        pts, why = tone(h["titel"])
+        if len(tks) > 1:        # which company the words belong to is unclear
+            pts, why = 0, ["in einer Schlagzeile mit anderen Firmen genannt"]
+        for tk in tks:
+            add(tk, pts, why, h["zeit"], h["quelle"], h["titel"], h.get("link"), pts == 0)
+    out = []
+    for row in rows.values():
+        row["tendenz"] = max(-3, min(3, row.pop("summe")))
+        if row["tendenz"] != 0:
+            row["offen"] = False
+        if not row["gruende"]:
+            row["gruende"] = ["keine eindeutigen Stichworte"]
+        out.append(row)
+    out.sort(key=lambda x: (-abs(x["tendenz"]), x["offen"], x["ticker"]))
+    return out
+
+
 def _get_as(url, ua):
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -450,6 +577,11 @@ def main(argv=None):
                 print("r/wallstreetbets (24 h): " + ", ".join("%s (%d)" % (w["ticker"], w["beitraege"]) for w in ig["wsb"]))
             for f in r.get("notenbank", []):
                 print("  Fed %s: %s" % (f["zeit"], f["titel"][:100]))
+            if r.get("betroffen"):
+                print("Betroffene Aktien, Tendenz nach Stichworten (keine Prognose):")
+                for b in r["betroffen"][:20]:
+                    arrow = ("↑" * b["tendenz"]) if b["tendenz"] > 0 else ("↓" * -b["tendenz"]) if b["tendenz"] < 0 else "→"
+                    print("  %-6s %-4s %s" % (b["ticker"], arrow, "; ".join(b["gruende"])[:100]))
             print("Handelsstopps heute (Nasdaq-Liste):")
             for h in r["stopps"][:40]:
                 print("  %s  %-6s %s%s" % (h["time"], h["symbol"], h["meaning"],

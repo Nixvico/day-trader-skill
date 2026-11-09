@@ -122,6 +122,36 @@ class Sources(unittest.TestCase):
         self.assertEqual(out["wsb"], [{"ticker": "ASTS", "beitraege": 2}, {"ticker": "NVDA", "beitraege": 1}])
 
 
+class Tendency(unittest.TestCase):
+    def test_tone(self):
+        self.assertEqual(M.tone("Acme agrees to be acquired by Big Co for $40 per share in cash")[0], 3)
+        self.assertEqual(M.tone("Zeta Reports Beat and Raise Quarter, Raises Full-Year Guidance")[0], 3)
+        self.assertEqual(M.tone("TEN Holdings Announces Pricing of $2.0 Million Registered Direct Offering")[0], -2)
+        self.assertEqual(M.tone("Revenue falls short of expectations")[0], -2)     # not also "Kurs fällt"
+        self.assertEqual(M.tone("Energizer declares quarterly dividend")[0], 0)
+
+    def test_headline_tickers(self):
+        self.assertEqual(M.headline_tickers("As Nvidia's stock falls, AMD gains"), {"NVDA", "AMD"})
+        self.assertEqual(M.headline_tickers("Solidion (NASDAQ: STI) reports"), {"STI"})
+        self.assertEqual(M.headline_tickers("Target practice for the Fed"), set())
+
+    def test_affected_combines_sources(self):
+        r = {"meldungen": [{"ticker": "STI", "firma": "Solidion", "zeit": "17:30", "was": "Quartalszahlen",
+                            "items": ["2.02"], "link": "s"},
+                           {"ticker": "BAD", "firma": "Bad Inc", "zeit": "17:00", "was": "Insolvenz", "items": ["1.03"], "link": ""}],
+             "stopps": [{"symbol": "HLT", "code": "T1", "time": "10:04:18", "meaning": "Stopp"}],
+             "pressemitteilungen": [{"zeit": "17:36", "tickers": ["STI"], "titel": "Solidion beats estimates",
+                                     "art": ["Zahlen"], "quelle": "PR Newswire", "link": "p"}],
+             "schlagzeilen": [{"zeit": "09.11. 16:55", "titel": "Nvidia stock falls on probe", "quelle": "MarketWatch", "link": "m"}]}
+        rows = {x["ticker"]: x for x in M.affected(r)}
+        self.assertEqual(rows["BAD"]["tendenz"], -3)
+        self.assertEqual(rows["STI"]["tendenz"], 2)
+        self.assertEqual(len(rows["STI"]["meldungen"]), 2)
+        self.assertEqual(rows["NVDA"]["tendenz"], -2)
+        self.assertTrue(rows["HLT"]["offen"])
+        self.assertEqual(M.affected(r)[0]["ticker"], "BAD")
+
+
 class Dates(unittest.TestCase):
     def test_upcoming(self):
         ev = [{"datum": "2026-12-09", "zeit": "20:00", "was": "Fed-Zinsentscheid"},

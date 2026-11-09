@@ -121,6 +121,10 @@ python3 trader-kandidaten/markt.py termine --from termine.json   # Fed, Inflatio
   (MarketWatch, Google News), was gerade besprochen wird (StockTwits trending, r/wallstreetbets der
   letzten 24 Stunden) und die Pressemitteilungen der Fed. `--nur-sec` lässt diese Quellen weg. Fällt eine
   Quelle aus, fehlt nur ihr Teil.
+- Betroffene Aktien (`betroffen` im Radar): jede Aktie, die eine Meldung nennt, mit einer Tendenz von -3 bis +3
+  nach Stichworten (z. B. „to be acquired“ +3, „raises guidance“ +2, „offering“ -2, „bankruptcy“ -3) und den
+  8-K-Punkten (Insolvenz, unzuverlässige Bilanz ...). Quartalszahlen ohne Zahlen im Titel bleiben „Richtung
+  offen“. Nennt eine Schlagzeile mehrere Firmen, zählt sie für keine. Eine Einschätzung, keine Prognose.
 - Jedes Signal bekommt die Ampel (`markt`) und das relative Volumen der Ausbruchskerze (`vol_x`) mit ins
   Tagebuch. Beides ist eine Information, kein Filter, bis das Tagebuch zeigt, dass es einen Unterschied macht.
 
