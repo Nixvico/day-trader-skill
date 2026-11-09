@@ -1,0 +1,3 @@
+__pycache__/
+# the pack's working folder: config, watchlist, plans, state and the paper-trading journal
+trader/
