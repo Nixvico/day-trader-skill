@@ -53,7 +53,8 @@ DEFAULTS = {
     "fee_per_order_eur": 1.0,     # 1 EUR to buy, 1 EUR to sell
     "eur_usd": 1.15,              # dollars for one euro; set it to your broker's rate
     "fee_buffer_r": 0.10,         # on top of the fees: FX costs and stops that fill past the price
-    "max_price_usd": 190.0,       # about a third of the budget in dollars: at least 3 whole shares
+    "max_price_usd": None,        # no cap: with fractional shares any price fits the budget
+    "fractional": True,           # the broker sells fractions of a share (3 decimals)
     "min_target_pct": 2.2,
     "fresh_minutes": 10,
     "max_checks": 8,
@@ -105,8 +106,10 @@ def read_config(path):
         for k in DEFAULTS:
             if k in doc and doc[k] is not None:
                 cfg[k] = doc[k]
-    for k in ("budget_eur", "fee_per_order_eur", "eur_usd", "fee_buffer_r", "max_price_usd", "min_target_pct"):
+    for k in ("budget_eur", "fee_per_order_eur", "eur_usd", "fee_buffer_r", "min_target_pct"):
         cfg[k] = float(cfg[k])
+    cfg["max_price_usd"] = None if cfg["max_price_usd"] in (None, "", 0) else float(cfg["max_price_usd"])
+    cfg["fractional"] = bool(cfg["fractional"])
     for k in ("fresh_minutes", "max_checks"):
         cfg[k] = int(cfg[k])
     if cfg["eur_usd"] <= 0 or cfg["budget_eur"] <= 0:
@@ -175,9 +178,15 @@ def workdir_for(cfg, day):
 # ---------------------------------------------------------------- money and the hurdle
 
 def size_trade(entry, stop, target, cfg):
-    """Whole shares the budget buys, risk and P/L in EUR after fees, the fee hurdle in R."""
+    """Shares the budget buys (whole, or fractions to 3 decimals when the broker allows them),
+    risk and P/L in EUR after fees, the fee hurdle in R."""
     budget_usd = cfg["budget_eur"] * cfg["eur_usd"]
-    shares = int(math.floor(budget_usd / entry)) if entry > 0 else 0
+    if entry <= 0:
+        shares = 0
+    elif cfg.get("fractional"):
+        shares = math.floor(budget_usd / entry * 1000) / 1000.0
+    else:
+        shares = int(math.floor(budget_usd / entry))
     risk_ps = entry - stop
     fees = 2 * cfg["fee_per_order_eur"]
     out = {"shares": shares, "fees_eur": round(fees, 2), "stop_pct": round(risk_ps / entry * 100, 2),
@@ -367,7 +376,7 @@ def fresh_window(hits, scan_min, cfg, since_min, max_price):
     """Split scan hits into (fresh, too_old) inside the window since -> scan time, under the price cap."""
     fresh, old = [], []
     for h in hits:
-        if h.get("price") is None or h["price"] >= max_price:
+        if h.get("price") is None or (max_price is not None and h["price"] >= max_price):
             continue
         at = minutes_of(h.get("at"))
         if at <= since_min or at > scan_min:
@@ -388,6 +397,16 @@ def ensure_universe(wd):
 
 # ---------------------------------------------------------------- output
 
+def price_text(cfg):
+    return "" if cfg["max_price_usd"] is None else " unter %s $" % de(cfg["max_price_usd"], 0)
+
+
+def shares_text(x):
+    if x is None or x == "-":
+        return "-"
+    return str(int(x)) if float(x).is_integer() else de(x, 3)
+
+
 def table(rows, cfg, title, extra_lines=()):
     out = [title, ""]
     out.append("| Ticker | Status | Ausbruch | Einstieg | Stop | Ziel | Ziel % | Kurs jetzt | über Hoch | "
@@ -401,12 +420,13 @@ def table(rows, cfg, title, extra_lines=()):
             de(r.get("target")), de(r.get("target_pct")), de(r.get("price_now")),
             "-" if r.get("above_high") is None else ("ja" if r["above_high"] else "nein"),
             r.get("earnings", "-"), de(r.get("sim_r")), de(r.get("hist_r")), de(r.get("hurdle_r")),
-            r.get("shares", "-"), de(r.get("win_eur")), de(r.get("loss_eur")), r.get("verdict", "-")))
+            shares_text(r.get("shares", "-")), de(r.get("win_eur")), de(r.get("loss_eur")), r.get("verdict", "-")))
     out.append("")
     out.extend(extra_lines)
-    out.append("Rechnung: %s € Budget, %s € pro Kauf und pro Verkauf, 1 € = %s $. Hürde = Gebühren ÷ Risiko "
-               "in € + %s R." % (de(cfg["budget_eur"], 0), de(cfg["fee_per_order_eur"]), de(cfg["eur_usd"]),
-                                de(cfg["fee_buffer_r"])))
+    out.append("Rechnung: %s € Budget, %s € pro Kauf und pro Verkauf, 1 € = %s $, %s. Hürde = Gebühren ÷ "
+               "Risiko in € + %s R." % (de(cfg["budget_eur"], 0), de(cfg["fee_per_order_eur"]), de(cfg["eur_usd"]),
+                                       "Bruchstücke erlaubt" if cfg.get("fractional") else "nur ganze Aktien",
+                                       de(cfg["fee_buffer_r"])))
     out.append("„Zahlen: nein“ heißt nur: keine Schlagzeile dazu. Das News-Tool hat keinen Terminkalender.")
     out.append(NOTE)
     return "\n".join(out)
@@ -419,7 +439,7 @@ def finish(rows, cfg, title, args, wd, extra_lines=(), stamp="check"):
     tests = [r for r in rows if r["verdict"] == "Test-Kandidat"]
     doc = {"created_by": "trader-kandidaten", "mode": getattr(args, "cmd", ""), "title": title,
            "config": {k: cfg[k] for k in ("budget_eur", "fee_per_order_eur", "eur_usd", "fee_buffer_r",
-                                          "max_price_usd", "min_target_pct", "fresh_minutes")},
+                                          "max_price_usd", "fractional", "min_target_pct", "fresh_minutes")},
            "rows": rows, "test_kandidaten": [r["ticker"] for r in tests]}
     path = os.path.join(wd, "ergebnis-%s.json" % stamp)
     with open(path, "w", encoding="utf-8") as fh:
@@ -474,8 +494,8 @@ def cmd_scan(a, cfg):
         if s not in keep and flags.get(s, ("nein",))[0] != "nein":
             rows.append({"ticker": s, "status": "triggered", "earnings": flags[s][0], "earnings_note": flags[s][1],
                          "fixed": EXCLUDED.get(flags[s][0], "raus")})
-    lines = ["Scan %s: %d Treffer, im Fenster ab %s unter %s $: %d frisch, %d zu alt (%s)." % (
-        scan.get("as_of"), len(scan.get("hits") or []), hhmm(since), de(cfg["max_price_usd"], 0),
+    lines = ["Scan %s: %d Treffer, im Fenster ab %s%s: %d frisch, %d zu alt (%s)." % (
+        scan.get("as_of"), len(scan.get("hits") or []), hhmm(since), price_text(cfg),
         len(fresh), len(old), " ".join(h["symbol"] for h in old) or "-")]
     if scan.get("unconfirmed"):
         lines.append("Hinweis: %s weitere Kandidaten hat der Scanner nicht genau geprüft." % scan["unconfirmed"])
@@ -499,15 +519,16 @@ def cmd_kandidaten(a, cfg):
             raise KError("der Daily-Scan hat keine Datei geschrieben: %s" % (se or so).strip()[-300:])
     with open(out, encoding="utf-8") as fh:
         daily = json.load(fh)
-    hits = [h for h in daily.get("hits") or [] if h.get("price") is not None and h["price"] < cfg["max_price_usd"]]
+    hits = [h for h in daily.get("hits") or [] if h.get("price") is not None
+            and (cfg["max_price_usd"] is None or h["price"] < cfg["max_price_usd"])]
     # the daily scan lists the most traded first; news for a few more than we check, as spares
     syms = [h["symbol"] for h in hits][:cfg["max_checks"] * 3]
     flags, notes = news_flags(syms, universe_names(uni))
     keep = [s for s in syms if flags.get(s, ("nein",))[0] == "nein"][:cfg["max_checks"]]
     rows = check_all(keep, cfg, day, wd, flags, now_text=a.now)
     gone = [s for s in syms if flags.get(s, ("nein",))[0] != "nein"]
-    lines = ["Daily-Scan (%s): %d Treffer unter %s $, die %d meistgehandelten angesehen, %d wegen Zahlen "
-             "oder fehlender News gestrichen (%s), %d geprüft." % (daily.get("as_of"), len(hits), de(cfg["max_price_usd"], 0),
+    lines = ["Daily-Scan (%s): %d Treffer%s, die %d meistgehandelten angesehen, %d wegen Zahlen "
+             "oder fehlender News gestrichen (%s), %d geprüft." % (daily.get("as_of"), len(hits), price_text(cfg),
                                                len(syms), len(gone), " ".join(gone) or "-", len(keep))]
     if now.hour * 60 + now.minute < 9 * 60 + 50:
         lines.append("Vor 9:50 ET steht die Range noch nicht: Ausbruch, Ziel und Zeitmaschine kommen erst danach.")
@@ -550,6 +571,12 @@ def _num(x):
     return "" if x is None else ("%.2f" % x if isinstance(x, float) else str(x))
 
 
+def _shares(x):
+    if x is None:
+        return ""
+    return str(int(x)) if float(x).is_integer() else ("%.3f" % x).rstrip("0").rstrip(".")
+
+
 def journal_add(path, rows, day=None, all_rows=False):
     """Add Test-Kandidaten (or every planned trade with all_rows) not already in the journal."""
     have = journal_read(path)
@@ -565,7 +592,7 @@ def journal_add(path, rows, day=None, all_rows=False):
             continue
         have.append({"datum": d, "ticker": r["ticker"], "ausbruch": r.get("entry_time", ""),
                      "einstieg": _num(r.get("entry")), "stop": _num(r.get("stop")), "ziel": _num(r.get("target")),
-                     "stueck": _num(r.get("shares")), "risiko_eur": _num(r.get("risk_eur")),
+                     "stueck": _shares(r.get("shares")), "risiko_eur": _num(r.get("risk_eur")),
                      "gebuehren_eur": _num(r.get("fees_eur")), "huerde_r": _num(r.get("hurdle_r")),
                      "sim_r": _num(r.get("sim_r")), "echt_r": _num(r.get("hist_r")),
                      "urteil": r.get("verdict", "")})
@@ -623,7 +650,7 @@ def journal_update(path, cfg, now_text=None, provider=None):
         if not res:
             continue
         kind, px, m = res
-        shares = int(float(r["stueck"] or 0))
+        shares = float(r["stueck"] or 0)
         fees = float(r["gebuehren_eur"] or 0)
         r["ergebnis"], r["ausstieg"], r["ausstieg_zeit"] = kind, "%.2f" % px, hhmm(m)
         r["r"] = "%.2f" % ((px - entry) / (entry - stop))
@@ -675,7 +702,11 @@ def journal_docs(rows):
             if k in NUMERIC:
                 d[k] = float(v) if v not in ("", None) else None
             elif k == "stueck":
-                d[k] = int(float(v)) if v not in ("", None) else None
+                if v in ("", None):
+                    d[k] = None
+                else:
+                    f = float(v)
+                    d[k] = int(f) if f.is_integer() else f
             else:
                 d[k] = v if v is not None else ""
         out[doc_id(r)] = d
@@ -687,7 +718,7 @@ def journal_import(path, docs):
     rows = {doc_id(r): r for r in journal_read(path)}
     items = docs.values() if isinstance(docs, dict) else docs
     for d in items:
-        r = {k: ("" if d.get(k) is None else (_num(d[k]) if isinstance(d.get(k), (int, float)) and k != "stueck"
+        r = {k: ("" if d.get(k) is None else (_shares(d[k]) if k == "stueck" else _num(d[k]) if isinstance(d.get(k), (int, float))
                                              else str(d[k]))) for k in JOURNAL_FIELDS}
         rows[doc_id(r)] = r
     merged = sorted(rows.values(), key=lambda r: (r["datum"], r["ticker"]))

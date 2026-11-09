@@ -3,8 +3,8 @@ name: trader-kandidaten
 description: >-
   Kandidaten-Check. The whole morning routine for a small account in one
   command, with German output: runs the opening-range scan (or the daily
-  pre-selection, or tickers you name), keeps breakouts under a price cap that
-  are at most 10 minutes old, drops stocks with their own earnings yesterday,
+  pre-selection, or tickers you name), keeps breakouts (optionally under a price
+  cap) that are at most 10 minutes old, drops stocks with their own earnings yesterday,
   today or coming up, then for each one runs the entry check, the exit plan
   (stop at the range middle, target 2R) and the Time Machine, sizes it to a
   euro budget and turns broker fees into a fee hurdle in R. One verdict per
@@ -69,8 +69,8 @@ Richtung `fee_buffer_r`.
 
 `trader/kandidaten.json` (Vorlage: `config.example.json` in diesem Ordner).
 Ohne Datei gelten: 500 € Budget, 1 € pro Kauf und 1 € pro Verkauf,
-1 € = 1,15 $, Puffer 0,10 R, unter 190 $ (etwa ein Drittel des Budgets, also
-mindestens 3 ganze Aktien), Ziel ab 2,2 %, frisch = 10 Minuten,
+1 € = 1,15 $, Puffer 0,10 R, Bruchstücke erlaubt (`fractional`, auf 3 Stellen) und
+darum keine Preisgrenze (`max_price_usd: null`), Ziel ab 2,2 %, frisch = 10 Minuten,
 höchstens 8 Aktien pro Lauf. Den Wechselkurs auf den des Brokers setzen.
 
 ## Was er schreibt
@@ -112,3 +112,7 @@ Numbers und Excel auf Deutsch direkt öffnen.
   the chat, AND the brokerage tool is set to "Needs approval" in Claude.
 - Day trading loses most people money. A fee hurdle and a journal make the
   test honest; they do not make a trade win.
+
+Nur ganze Aktien beim Broker? Dann `"fractional": false` und eine Preisgrenze
+setzen, etwa `"max_price_usd": 190` (ein Drittel des Budgets, also mindestens
+3 Aktien), sonst bleibt bei teuren Aktien zu viel Geld liegen.

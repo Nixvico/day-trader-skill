@@ -9,6 +9,7 @@ from _load import load
 
 K = load("trader-kandidaten", "kandidaten")
 CFG = dict(K.DEFAULTS)
+WHOLE = dict(CFG, fractional=False)
 
 
 def row(**kw):
@@ -20,13 +21,28 @@ def row(**kw):
 
 class Money(unittest.TestCase):
     def test_size_and_hurdle_for_500_eur(self):
-        s = K.size_trade(13.89, 13.72, 14.23, CFG)       # RIVN 2026-11-09
+        s = K.size_trade(13.89, 13.72, 14.23, WHOLE)     # RIVN 2026-11-09, whole shares
         self.assertEqual(s["shares"], 41)                # 575 $ / 13.89
         self.assertAlmostEqual(s["risk_eur"], 6.06, places=2)
         self.assertEqual(s["fees_eur"], 2.0)
         self.assertAlmostEqual(s["hurdle_r"], 0.43, places=2)
         self.assertAlmostEqual(s["loss_eur"], -8.06, places=2)
         self.assertAlmostEqual(s["target_pct"], 2.45, places=2)
+
+    def test_fractional_shares_use_the_whole_budget(self):
+        s = K.size_trade(13.89, 13.72, 14.23, CFG)       # fractions are the default
+        self.assertAlmostEqual(s["shares"], 41.396, places=3)   # 575 / 13.89 = 41.3967, rounded down
+        big = K.size_trade(900.0, 890.0, 920.0, CFG)     # a 900 dollar stock still fits
+        self.assertAlmostEqual(big["shares"], 0.638, places=3)
+        self.assertAlmostEqual(big["risk_eur"], 0.638 * 10 / 1.15, places=2)
+        self.assertEqual(K.shares_text(41.397), "41,397")
+        self.assertEqual(K.shares_text(6), "6")
+
+    def test_no_price_cap_by_default(self):
+        hits = [{"symbol": "BIG", "price": 900, "at": "10:10 AM"}]
+        fresh, old = K.fresh_window(hits, K.minutes_of("10:15"), CFG, K.minutes_of("09:45"), CFG["max_price_usd"])
+        self.assertEqual([h["symbol"] for h in fresh], ["BIG"])
+        self.assertIsNone(K.read_config(None)["max_price_usd"])
 
     def test_more_budget_lowers_the_hurdle_toward_the_buffer(self):
         big = dict(CFG, budget_eur=50000)
@@ -35,7 +51,7 @@ class Money(unittest.TestCase):
         self.assertGreaterEqual(s["hurdle_r"], CFG["fee_buffer_r"])
 
     def test_budget_too_small_for_one_share(self):
-        s = K.size_trade(900.0, 890.0, 920.0, CFG)
+        s = K.size_trade(900.0, 890.0, 920.0, WHOLE)
         self.assertEqual(s["shares"], 0)
         self.assertIsNone(s["hurdle_r"])
         self.assertEqual(K.verdict(row(hurdle_r=None, **{"target_pct": 3.0}), CFG, False),
