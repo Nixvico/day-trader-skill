@@ -154,6 +154,23 @@ class Journal(unittest.TestCase):
             self.assertEqual(lines[1][3], "10,00")                          # decimal comma
             del bars
 
+    def test_dump_and_import_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "tb.csv")
+            r = row(entry=10.0, stop=9.8, target=10.4, entry_time="10:00 AM", shares=57, risk_eur=9.91,
+                    fees_eur=2.0, now="2026-11-05 10:20:00", verdict="Test-Kandidat")
+            K.journal_add(path, [r])
+            docs = K.journal_docs(K.journal_read(path))
+            self.assertEqual(list(docs), ["2026-11-05_TEST"])
+            doc = docs["2026-11-05_TEST"]
+            self.assertEqual((doc["einstieg"], doc["stueck"], doc["ergebnis"], doc["gewinn_eur"]), (10.0, 57, "", None))
+            other = os.path.join(d, "other.csv")
+            done = dict(doc, ergebnis="Ziel", ausstieg=10.4, ausstieg_zeit="10:10", r=2.0, gewinn_eur=17.83)
+            self.assertEqual(K.journal_import(other, [done]), 1)
+            back = K.journal_read(other)[0]
+            self.assertEqual((back["ergebnis"], back["ausstieg"], back["stueck"], back["gewinn_eur"]),
+                             ("Ziel", "10.40", "57", "17.83"))
+
     def test_nothing_is_written_into_the_repo_by_default(self):
         self.assertTrue(K.DEFAULTS["workdir"].startswith("/tmp/"))
         self.assertTrue(K.DEFAULTS["journal"].startswith("trader/"))       # trader/ is git-ignored

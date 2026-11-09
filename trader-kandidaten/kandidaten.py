@@ -7,7 +7,8 @@ for a small account, in German.
                             -> fee hurdle -> one verdict per stock
   kandidaten.py kandidaten  the same checks on the daily scan's pre-selection
   kandidaten.py check T ... the same checks on tickers you name
-  kandidaten.py tagebuch    the paper-trading journal: add, update, show, export
+  kandidaten.py tagebuch    the paper-trading journal: add, update, show, export,
+                            dump / import (typed JSON documents for a journal page)
 
 It calls the pack's own tools (scan.py, news.py, entry.py, exit.py,
 timemachine.py) with --json and writes nothing inside the repo: every scan,
@@ -656,8 +657,54 @@ def journal_export(rows, out_path):
             w.writerow(vals)
 
 
+NUMERIC = {"einstieg", "stop", "ziel", "risiko_eur", "gebuehren_eur", "huerde_r", "sim_r", "echt_r",
+           "ausstieg", "r", "gewinn_eur"}
+
+
+def doc_id(r):
+    return "%s_%s" % (r["datum"], r["ticker"])
+
+
+def journal_docs(rows):
+    """Journal rows as typed JSON documents keyed by date_ticker (for a journal page's store)."""
+    out = {}
+    for r in rows:
+        d = {}
+        for k in JOURNAL_FIELDS:
+            v = r.get(k, "")
+            if k in NUMERIC:
+                d[k] = float(v) if v not in ("", None) else None
+            elif k == "stueck":
+                d[k] = int(float(v)) if v not in ("", None) else None
+            else:
+                d[k] = v if v is not None else ""
+        out[doc_id(r)] = d
+    return out
+
+
+def journal_import(path, docs):
+    """Merge documents (a list, or a dict keyed by id) into the CSV journal; the documents win."""
+    rows = {doc_id(r): r for r in journal_read(path)}
+    items = docs.values() if isinstance(docs, dict) else docs
+    for d in items:
+        r = {k: ("" if d.get(k) is None else (_num(d[k]) if isinstance(d.get(k), (int, float)) and k != "stueck"
+                                             else str(d[k]))) for k in JOURNAL_FIELDS}
+        rows[doc_id(r)] = r
+    merged = sorted(rows.values(), key=lambda r: (r["datum"], r["ticker"]))
+    journal_write(path, merged)
+    return len(merged)
+
+
 def cmd_tagebuch(a, cfg):
     path = a.path or cfg["journal"]
+    if a.action == "dump":
+        print(json.dumps(journal_docs(journal_read(path)), indent=2, ensure_ascii=False))
+        return 0
+    if a.action == "import":
+        with open(a.from_file, encoding="utf-8") as fh:
+            n = journal_import(path, json.load(fh))
+        print("%s hat jetzt %d Zeile(n)." % (path, n))
+        return 0
     if a.action == "add":
         with open(a.from_file, encoding="utf-8") as fh:
             doc = json.load(fh)
@@ -714,9 +761,9 @@ def main(argv=None):
     p.add_argument("tickers", nargs="+")
     common(p)
     p = sub.add_parser("tagebuch", help="Paper-Trading-Tagebuch")
-    p.add_argument("action", choices=["show", "add", "update", "export"])
+    p.add_argument("action", choices=["show", "add", "update", "export", "dump", "import"])
     p.add_argument("--path", help="Tagebuch-Datei (Standard aus der Config)")
-    p.add_argument("--from", dest="from_file", help="ergebnis-*.json zum Eintragen (add)")
+    p.add_argument("--from", dest="from_file", help="add: ergebnis-*.json; import: JSON-Dokumente (Liste oder nach id)")
     p.add_argument("--all", action="store_true", help="add: jeden geplanten Trade, nicht nur Test-Kandidaten")
     p.add_argument("--out", help="export: Zieldatei")
     p.add_argument("--now")
@@ -726,8 +773,8 @@ def main(argv=None):
     try:
         cfg = read_config(a.config)
         if a.cmd == "tagebuch":
-            if a.action == "add" and not a.from_file:
-                raise KError("tagebuch add braucht --from ergebnis-*.json")
+            if a.action in ("add", "import") and not a.from_file:
+                raise KError("tagebuch %s braucht --from DATEI" % a.action)
             return cmd_tagebuch(a, cfg)
         return {"scan": cmd_scan, "kandidaten": cmd_kandidaten, "check": cmd_check}[a.cmd](a, cfg)
     except KError as e:
