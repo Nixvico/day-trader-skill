@@ -38,6 +38,14 @@ class Money(unittest.TestCase):
         self.assertEqual(K.shares_text(41.397), "41,397")
         self.assertEqual(K.shares_text(6), "6")
 
+    def test_risk_is_capped_at_two_percent_of_the_budget(self):
+        s = K.size_trade(459.81, 402.77, 573.89, CFG)    # AMD swing plan: a 12 % stop
+        self.assertAlmostEqual(s["risk_eur"], 10.0, places=1)
+        self.assertLess(s["shares"], 0.21)
+        self.assertAlmostEqual(s["hurdle_r"], 0.30, places=2)   # 2 EUR fees on 10 EUR risk + 0.10
+        wide = dict(CFG, max_risk_pct=None)
+        self.assertGreater(K.size_trade(459.81, 402.77, 573.89, wide)["risk_eur"], 60)
+
     def test_no_price_cap_by_default(self):
         hits = [{"symbol": "BIG", "price": 900, "at": "10:10 AM"}]
         fresh, old = K.fresh_window(hits, K.minutes_of("10:15"), CFG, K.minutes_of("09:45"), CFG["max_price_usd"])
@@ -182,7 +190,7 @@ class Journal(unittest.TestCase):
             self.assertEqual((doc["einstieg"], doc["stueck"], doc["ergebnis"], doc["gewinn_eur"]), (10.0, 57, "", None))
             other = os.path.join(d, "other.csv")
             done = dict(doc, ergebnis="Ziel", ausstieg=10.4, ausstieg_zeit="10:10", r=2.0, gewinn_eur=17.83)
-            self.assertEqual(K.journal_import(other, [done]), 1)
+            self.assertEqual(K.journal_import(other, [done, dict(done, ticker="SW", art="swing")]), 1)
             back = K.journal_read(other)[0]
             self.assertEqual((back["ergebnis"], back["ausstieg"], back["stueck"], back["gewinn_eur"]),
                              ("Ziel", "10.40", "57", "17.83"))

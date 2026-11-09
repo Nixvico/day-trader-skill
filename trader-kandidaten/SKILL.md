@@ -83,6 +83,27 @@ höchstens 8 Aktien pro Lauf. Den Wechselkurs auf den des Brokers setzen.
   ist in `.gitignore`). In einer Cloud-Sitzung ist der Ordner nach dem Ende
   weg: das Tagebuch dann exportieren oder einen festen Pfad setzen.
 
+## Swing (bis 10 Handelstage)
+
+```bash
+python3 trader-kandidaten/swing.py scan                      # heutige 20-Tage-Hochs, nach Börsenschluss
+python3 trader-kandidaten/swing.py scan --symbols AMD,EOG    # bestimmte Ticker
+python3 trader-kandidaten/swing.py update --from offen.json --out neu.json   # offene Swing-Trades fortschreiben
+```
+
+- Signal: Schlusskurs über allen Schlusskursen der 20 Tage davor.
+- Einstieg: am nächsten Handelstag, sobald der Kurs über dem Hoch des Signaltags handelt (oder zur
+  Eröffnung, wenn er darüber öffnet). Kommt der Kurs dort nicht hin, gibt es keinen Trade.
+- Stop: Hoch des Signaltags minus 1,5 × ATR(14). Ziel: 2R. Ausstieg: Ziel, Stop oder Schluss des
+  10. Handelstags. Eine Kurslücke durch den Stop wird zur Eröffnung abgerechnet.
+- Keine Swing-Trades, wenn die Firma vor höchstens 2 Tagen Zahlen gemeldet hat oder die nächsten Zahlen
+  in die Haltezeit fallen könnten (letzter 10-Q/10-K bei der SEC + 91 Tage, ±10 Tage).
+- Geprüft wird jede Aktie mit ihren Tageskursen der letzten 2 Jahre (ein Trade nach dem anderen).
+  Swing-Kandidat ab 8 Fällen und Ø R nach Gebühren mindestens `fee_buffer_r`.
+
+Für alle Trades gilt: Verlust am Stop höchstens `max_risk_pct` (2 %) des Budgets. Ist der Stop weit
+weg, kauft das Tool weniger Stück.
+
 ## Das Tagebuch
 
 `--journal` trägt jeden Test-Kandidaten ein (`--journal-all`: jeden Trade mit

@@ -53,6 +53,7 @@ DEFAULTS = {
     "fee_per_order_eur": 1.0,     # 1 EUR to buy, 1 EUR to sell
     "eur_usd": 1.15,              # dollars for one euro; set it to your broker's rate
     "fee_buffer_r": 0.10,         # on top of the fees: FX costs and stops that fill past the price
+    "max_risk_pct": 2.0,          # never lose more than this share of the budget at the stop
     "max_price_usd": None,        # no cap: with fractional shares any price fits the budget
     "fractional": True,           # the broker sells fractions of a share (3 decimals)
     "min_target_pct": 2.2,
@@ -106,7 +107,7 @@ def read_config(path):
         for k in DEFAULTS:
             if k in doc and doc[k] is not None:
                 cfg[k] = doc[k]
-    for k in ("budget_eur", "fee_per_order_eur", "eur_usd", "fee_buffer_r", "min_target_pct"):
+    for k in ("budget_eur", "fee_per_order_eur", "eur_usd", "fee_buffer_r", "min_target_pct", "max_risk_pct"):
         cfg[k] = float(cfg[k])
     cfg["max_price_usd"] = None if cfg["max_price_usd"] in (None, "", 0) else float(cfg["max_price_usd"])
     cfg["fractional"] = bool(cfg["fractional"])
@@ -179,15 +180,20 @@ def workdir_for(cfg, day):
 
 def size_trade(entry, stop, target, cfg):
     """Shares the budget buys (whole, or fractions to 3 decimals when the broker allows them),
+    no more than keeps the loss at the stop within max_risk_pct of the budget,
     risk and P/L in EUR after fees, the fee hurdle in R."""
     budget_usd = cfg["budget_eur"] * cfg["eur_usd"]
+    risk_ps = entry - stop
+    cap = budget_usd / entry if entry > 0 else 0
+    if risk_ps > 0 and cfg.get("max_risk_pct"):
+        # the loss at the stop may not exceed max_risk_pct of the budget
+        cap = min(cap, cfg["budget_eur"] * cfg["max_risk_pct"] / 100.0 * cfg["eur_usd"] / risk_ps)
     if entry <= 0:
         shares = 0
     elif cfg.get("fractional"):
-        shares = math.floor(budget_usd / entry * 1000) / 1000.0
+        shares = math.floor(cap * 1000) / 1000.0
     else:
-        shares = int(math.floor(budget_usd / entry))
-    risk_ps = entry - stop
+        shares = int(math.floor(cap))
     fees = 2 * cfg["fee_per_order_eur"]
     out = {"shares": shares, "fees_eur": round(fees, 2), "stop_pct": round(risk_ps / entry * 100, 2),
            "target_pct": round((target - entry) / entry * 100, 2)}
@@ -718,6 +724,8 @@ def journal_import(path, docs):
     rows = {doc_id(r): r for r in journal_read(path)}
     items = docs.values() if isinstance(docs, dict) else docs
     for d in items:
+        if d.get("art") == "swing":        # swing trades run for days: swing.py update handles them
+            continue
         r = {k: ("" if d.get(k) is None else (_shares(d[k]) if k == "stueck" else _num(d[k]) if isinstance(d.get(k), (int, float))
                                              else str(d[k]))) for k in JOURNAL_FIELDS}
         rows[doc_id(r)] = r

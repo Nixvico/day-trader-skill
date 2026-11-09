@@ -3,6 +3,7 @@
   "fee_per_order_eur": 1.0,
   "eur_usd": 1.15,
   "fee_buffer_r": 0.1,
+  "max_risk_pct": 2.0,
   "max_price_usd": null,
   "fractional": true,
   "min_target_pct": 2.2,
