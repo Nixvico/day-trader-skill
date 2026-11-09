@@ -298,7 +298,8 @@ def as_doc(r):
             "risiko_eur": r.get("risk_eur"), "gebuehren_eur": r.get("fees_eur"), "huerde_r": cfg_buffer(),
             "sim_r": None, "echt_r": r.get("bt_r_net"), "urteil": r["verdict"], "ergebnis": "",
             "ausstieg": None, "ausstieg_zeit": "", "r": None, "gewinn_eur": None,
-            "bt_n": r.get("bt_n"), "bt_win": r.get("bt_win")}
+            "bt_n": r.get("bt_n"), "bt_win": r.get("bt_win"), "markt": r.get("markt", ""),
+            "termine": r.get("termine", "")}
 
 
 def cfg_buffer():
@@ -329,6 +330,25 @@ def cmd_scan(a, cfg):
     names = K.universe_names(os.path.join(wd, "universe.txt"))
     heads, _ = K.news_flags(syms, names, hours=48) if syms else ({}, [])
     rows = [check(s, cfg, today, heads.get(s, ("nein", ""))) for s in syms]
+    mk = K.market_now()
+    events = []
+    if a.termine and os.path.exists(a.termine):
+        with open(a.termine, encoding="utf-8") as fh:
+            ev = json.load(fh)
+        events = ev if isinstance(ev, list) else ev.get("termine", [])
+    window = []
+    for e in events:
+        try:
+            d = datetime.date.fromisoformat(str(e.get("datum"))[:10])
+        except ValueError:
+            continue
+        if today < d <= today + datetime.timedelta(days=14):
+            window.append("%s %s" % (d.strftime("%d.%m."), e.get("was", "")))
+    for r in rows:
+        if mk:
+            r["markt"] = mk["ampel"]
+        if window:
+            r["termine"] = "; ".join(window)
     keep = [r for r in rows if r.get("level")]
     docs = {"%s_%s_swing" % (r["datum"], r["ticker"]): as_doc(r) for r in keep}
     if a.docs:
@@ -354,6 +374,10 @@ def cmd_scan(a, cfg):
         if r.get("earnings_note"):
             print("%s: %s" % (r["ticker"], r["earnings_note"]))
     best = [r for r in rows if r["verdict"] == "Swing-Kandidat"]
+    if mk:
+        print("Markt: Ampel %s (%s). Information, kein Filter." % (mk["ampel"].upper(), mk["grund"]))
+    if window:
+        print("Marktweite Termine in der Haltezeit: " + "; ".join(window) + ". An solchen Tagen kann der Kurs springen.")
     print("")
     print("Ø R netto = Durchschnitt der Regel-Trades der letzten 2 Jahre, nach Gebühren (2 € pro Trade bei %s €). "
           "Swing-Kandidat ab %d Fällen und Ø R netto mindestens %s." % (
@@ -423,6 +447,7 @@ def main(argv=None):
     p = sub.add_parser("scan", help="heutige 20-Tage-Hochs prüfen")
     p.add_argument("--symbols", help="kommagetrennte Ticker statt des Daily-Scans")
     p.add_argument("--docs", help="Tagebuch-Dokumente (collection trades) hierhin schreiben")
+    p.add_argument("--termine", help="JSON-Liste marktweiter Termine (datum, zeit, was), für einen Hinweis")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("update", help="offene Swing-Trades fortschreiben")
     p.add_argument("--from", dest="from_file", required=True, help="JSON: Dokumente (Liste oder nach id)")

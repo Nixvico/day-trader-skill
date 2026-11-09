@@ -67,7 +67,7 @@ DEFAULTS = {
 
 JOURNAL_FIELDS = ["datum", "ticker", "ausbruch", "einstieg", "stop", "ziel", "stueck",
                   "risiko_eur", "gebuehren_eur", "huerde_r", "sim_r", "echt_r", "urteil",
-                  "ergebnis", "ausstieg", "ausstieg_zeit", "r", "gewinn_eur"]
+                  "ergebnis", "ausstieg", "ausstieg_zeit", "r", "gewinn_eur", "markt", "vol_x"]
 
 NOTE = ("Ein Test-Kandidat ist nur für einen Test im Paper-Trading gedacht. "
         "Keine Kaufempfehlung, not financial advice. Es wurde nichts gekauft.")
@@ -319,6 +319,7 @@ def check_symbol(sym, cfg, day, wd, earnings=("nein", ""), scan_hit=None, scan_m
         if row["status"] != "triggered" or not t:
             return row
         row["entry"], row["entry_time"] = t.get("price"), t.get("time")
+        row["vol_x"] = t.get("volume_x")          # breakout bar volume / opening-range average
         if scan_min is not None and t.get("time"):
             row["age_min"] = scan_min - minutes_of(t["time"])
         row["above_high"] = last is not None and row["or_high"] is not None and last > row["or_high"]
@@ -417,16 +418,16 @@ def shares_text(x):
 def table(rows, cfg, title, extra_lines=()):
     out = [title, ""]
     out.append("| Ticker | Status | Ausbruch | Einstieg | Stop | Ziel | Ziel % | Kurs jetzt | über Hoch | "
-               "Zahlen | Ø R Sim / echt | Hürde | Stück | € am Ziel / Stop | Urteil |")
-    out.append("|" + "---|" * 15)
+               "Zahlen | Vol × | Ø R Sim / echt | Hürde | Stück | € am Ziel / Stop | Urteil |")
+    out.append("|" + "---|" * 16)
     for r in rows:
         st = {"triggered": "ausgelöst", "waiting": "wartet", "expired": "abgelaufen",
               "no-data": "keine Daten"}.get(r.get("status"), r.get("status", "-"))
-        out.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s / %s | %s | %s | %s / %s | %s |" % (
+        out.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s / %s | %s | %s | %s / %s | %s |" % (
             r["ticker"], st, r.get("entry_time") or "-", de(r.get("entry")), de(r.get("stop")),
             de(r.get("target")), de(r.get("target_pct")), de(r.get("price_now")),
             "-" if r.get("above_high") is None else ("ja" if r["above_high"] else "nein"),
-            r.get("earnings", "-"), de(r.get("sim_r")), de(r.get("hist_r")), de(r.get("hurdle_r")),
+            r.get("earnings", "-"), de(r.get("vol_x"), 1), de(r.get("sim_r")), de(r.get("hist_r")), de(r.get("hurdle_r")),
             shares_text(r.get("shares", "-")), de(r.get("win_eur")), de(r.get("loss_eur")), r.get("verdict", "-")))
     out.append("")
     out.extend(extra_lines)
@@ -439,12 +440,29 @@ def table(rows, cfg, title, extra_lines=()):
     return "\n".join(out)
 
 
+def market_now():
+    """The market light (markt.py status), or None when it cannot be read."""
+    try:
+        spec = importlib.util.spec_from_file_location("trader_markt_for_kandidaten", os.path.join(HERE, "markt.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.status()
+    except Exception:
+        return None
+
+
 def finish(rows, cfg, title, args, wd, extra_lines=(), stamp="check"):
     fresh_required = getattr(args, "cmd", "") == "scan"
+    mk = None if getattr(args, "no_market", False) else market_now()
+    if mk:
+        for r in rows:
+            r["markt"] = mk["ampel"]
+        extra_lines = ["Markt: Ampel %s (%s). Die Ampel ist eine Information, kein Filter." % (
+            mk["ampel"].upper(), mk["grund"])] + list(extra_lines)
     for r in rows:
         r["verdict"] = verdict(r, cfg, fresh_required)
     tests = [r for r in rows if r["verdict"] == "Test-Kandidat"]
-    doc = {"created_by": "trader-kandidaten", "mode": getattr(args, "cmd", ""), "title": title,
+    doc = {"created_by": "trader-kandidaten", "mode": getattr(args, "cmd", ""), "title": title, "markt": mk,
            "config": {k: cfg[k] for k in ("budget_eur", "fee_per_order_eur", "eur_usd", "fee_buffer_r",
                                           "max_price_usd", "fractional", "min_target_pct", "fresh_minutes")},
            "rows": rows, "test_kandidaten": [r["ticker"] for r in tests]}
@@ -602,7 +620,8 @@ def journal_add(path, rows, day=None, all_rows=False):
                      "stueck": _shares(r.get("shares")), "risiko_eur": _num(r.get("risk_eur")),
                      "gebuehren_eur": _num(r.get("fees_eur")), "huerde_r": _num(r.get("hurdle_r")),
                      "sim_r": _num(r.get("sim_r")), "echt_r": _num(r.get("hist_r")),
-                     "urteil": r.get("verdict", "")})
+                     "urteil": r.get("verdict", ""), "markt": r.get("markt", ""),
+                     "vol_x": _num(r.get("vol_x"))})
         keys.add((d, r["ticker"]))
         added += 1
     journal_write(path, have)
@@ -692,7 +711,7 @@ def journal_export(rows, out_path):
 
 
 NUMERIC = {"einstieg", "stop", "ziel", "risiko_eur", "gebuehren_eur", "huerde_r", "sim_r", "echt_r",
-           "ausstieg", "r", "gewinn_eur"}
+           "ausstieg", "r", "gewinn_eur", "vol_x"}
 
 
 def doc_id(r):
@@ -789,6 +808,7 @@ def main(argv=None):
         p.add_argument("--journal", nargs="?", const="", metavar="PATH",
                        help="Test-Kandidaten ins Tagebuch eintragen (Pfad aus der Config, wenn leer)")
         p.add_argument("--journal-all", action="store_true", help="jeden geplanten Trade eintragen, nicht nur Test-Kandidaten")
+        p.add_argument("--no-market", action="store_true", help="die Markt-Ampel nicht abfragen")
 
     p = sub.add_parser("scan", help="ORB-Scan, frische Ausbrüche prüfen")
     p.add_argument("--since", help="nur Ausbruchskerzen, die nach HH:MM geschlossen haben (Standard 09:45)")

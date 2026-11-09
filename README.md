@@ -145,6 +145,7 @@ python3 trader-pelosi/ptr.py index --member pelosi                     # her PTR
 python3 trader-kandidaten/kandidaten.py scan --journal                 # fresh breakouts, one verdict each
 python3 trader-kandidaten/kandidaten.py tagebuch update                # paper-trading results after 15:55
 python3 trader-kandidaten/swing.py scan                                # 20-day-high swing trades, held up to 10 days
+python3 trader-kandidaten/markt.py status                              # market light, VIX, sectors; radar: fresh 8-Ks, halts
 ```
 
 ```bash
@@ -214,7 +215,7 @@ trader-broker/      SKILL.md, ticket.py, claude_desktop_config.example.json
 trader-alerts/      SKILL.md, alerts.py, alerts.example.json
 trader-analyst/     SKILL.md, facts.py, metrics.example.json
 trader-pelosi/      SKILL.md, ptr.py
-trader-kandidaten/  SKILL.md, kandidaten.py, swing.py, config.example.json
+trader-kandidaten/  SKILL.md, kandidaten.py, swing.py, markt.py, config.example.json
 tests/              unittest suite + offline fixtures
 ```
 
