@@ -53,7 +53,7 @@ DEFAULTS = {
     "fee_per_order_eur": 1.0,     # 1 EUR to buy, 1 EUR to sell
     "eur_usd": 1.15,              # dollars for one euro; set it to your broker's rate
     "fee_buffer_r": 0.10,         # on top of the fees: FX costs and stops that fill past the price
-    "max_price_usd": 100.0,
+    "max_price_usd": 190.0,       # about a third of the budget in dollars: at least 3 whole shares
     "min_target_pct": 2.2,
     "fresh_minutes": 10,
     "max_checks": 8,

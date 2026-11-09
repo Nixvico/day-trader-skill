@@ -69,7 +69,8 @@ Richtung `fee_buffer_r`.
 
 `trader/kandidaten.json` (Vorlage: `config.example.json` in diesem Ordner).
 Ohne Datei gelten: 500 € Budget, 1 € pro Kauf und 1 € pro Verkauf,
-1 € = 1,15 $, Puffer 0,10 R, unter 100 $, Ziel ab 2,2 %, frisch = 10 Minuten,
+1 € = 1,15 $, Puffer 0,10 R, unter 190 $ (etwa ein Drittel des Budgets, also
+mindestens 3 ganze Aktien), Ziel ab 2,2 %, frisch = 10 Minuten,
 höchstens 8 Aktien pro Lauf. Den Wechselkurs auf den des Brokers setzen.
 
 ## Was er schreibt

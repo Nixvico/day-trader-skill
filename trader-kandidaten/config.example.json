@@ -3,7 +3,7 @@
   "fee_per_order_eur": 1.0,
   "eur_usd": 1.15,
   "fee_buffer_r": 0.10,
-  "max_price_usd": 100,
+  "max_price_usd": 190,
   "min_target_pct": 2.2,
   "fresh_minutes": 10,
   "max_checks": 8,
