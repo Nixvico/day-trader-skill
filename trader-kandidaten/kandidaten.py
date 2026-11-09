@@ -212,8 +212,9 @@ def size_trade(entry, stop, target, cfg):
 AHEAD = ("ahead of earnings", "to report", "will report", "reports soon", "earnings preview",
          "set to report", "before earnings", "ahead of its earnings", "ahead of q")
 # words that say the headline is about a fresh report, not an opinion piece that mentions earnings
-REPORTED = re.compile(r"\b(reports?|reported|results|beats?|miss(es|ed)?|tops?|surpass(es|ed)?|lags?|"
-                      r"snapshot|earnings call|guidance|outlook|q[1-4]\b|quarter(ly)?|fiscal)", re.I)
+REPORTED = re.compile(r"\b(reports? (q[1-4]|first|second|third|fourth|fiscal|quarter|earnings|results|"
+                      r"profit|loss|revenue|sales)|reported|results|beats?|miss(es|ed)?|tops?|surpass(es|ed)?|"
+                      r"lags?|snapshot|earnings call|guidance|q[1-4]\b|quarter(ly)?|fiscal)", re.I)
 STOP_WORDS = {"the", "inc", "inc.", "corp", "corp.", "co", "co.", "ltd", "plc", "holdings", "group",
               "company", "class", "common", "stock", "shares", "and", "of", "a"}
 

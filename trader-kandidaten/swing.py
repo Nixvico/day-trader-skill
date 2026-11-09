@@ -249,8 +249,12 @@ def check(sym, cfg, today, headline=("nein", ""), bars=None, earn=None):
                    win_eur=size["win_eur"], loss_eur=size["loss_eur"], target_pct=size["target_pct"],
                    hurdle_r=size["hurdle_r"])
         row["earnings"], row["earnings_note"] = earn or earnings_window(sym, today)
-        if headline[0] in ("ja", "steht an") and row["earnings"] not in ("gerade gemeldet", "erwartet"):
-            row["earnings"], row["earnings_note"] = ("gerade gemeldet" if headline[0] == "ja" else "erwartet"), headline[1]
+        # SEC dates decide "just reported"; a headline only adds a report that is coming up,
+        # or stands in for SEC when the company files none (foreign issuers)
+        if row["earnings"] in ("nein", "unbekannt") and headline[0] == "steht an":
+            row["earnings"], row["earnings_note"] = "erwartet", headline[1]
+        elif row["earnings"] == "unbekannt" and headline[0] == "ja":
+            row["earnings"], row["earnings_note"] = "gerade gemeldet", headline[1]
         row["verdict"] = verdict(row, cfg)
     except Exception as err:
         row["verdict"] = "raus (Fehler: %s)" % str(err)[:80]

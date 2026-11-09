@@ -117,6 +117,12 @@ class Earnings(unittest.TestCase):
         self.assertEqual(K.earnings_flag("NVO", [other], "Novo Nordisk A/S")[0], "nein")
         self.assertEqual(K.earnings_flag("SHEL", [opinion], "Shell plc")[0], "nein")
         self.assertEqual(K.earnings_flag("PFE", [untagged], "Pfizer, Inc.")[0], "nein")
+        trial = self.item("Johnson & Johnson reports 73% PSA response rate with investigational therapy", ticker="JNJ")
+        market = self.item("Global Genome Annotation Services Market Report 2026: Thermo Fisher and others", ticker="TMO")
+        self.assertEqual(K.earnings_flag("JNJ", [trial], "Johnson & Johnson")[0], "nein")
+        self.assertEqual(K.earnings_flag("TMO", [market], "Thermo Fisher Scientific Inc.")[0], "nein")
+        q3 = self.item("Moderna Q3 Earnings Call Highlights Raised Outlook", ticker="MRNA")
+        self.assertEqual(K.earnings_flag("MRNA", [q3], "Moderna, Inc.")[0], "ja")
 
 
 class Window(unittest.TestCase):
