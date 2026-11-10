@@ -47,6 +47,18 @@ python3 trader-kandidaten/kandidaten.py tagebuch export      # CSV für Numbers 
 
 Exit code: 0 when at least one Test-Kandidat came out, 1 otherwise, 2 on an error.
 
+## Reihenfolge beim Scan
+
+1. Der Scanner findet die Ausbrüche (die 200 meistgehandelten Kandidaten mit genauen Kursen).
+2. Frische-Regel: nur Ausbrüche, deren Kerze höchstens `fresh_minutes` vor dem Scan geschlossen hat.
+3. Vorfilter für alle: Ziel bei 2R unter `min_target_pct` fliegt sofort raus (Stop in der Range-Mitte, das
+   lässt sich aus dem Scan rechnen). Diese Ausbrüche kommen trotzdem mit Plan ins Tagebuch.
+4. Der Rest wird nach Handelsvolumen in Dollar sortiert (die meistgehandelten zuerst), nicht nach Alphabet.
+5. Zahlen-Check in Gruppen von 10, nur so weit, bis `max_checks` saubere Aktien zusammen sind. Eine Gruppe,
+   die nicht antwortet, wird einmal in halber Größe wiederholt.
+6. Gründliche Prüfung (Entry, Plan, Zeitmaschine) für bis zu `max_checks` Aktien, 8 gleichzeitig.
+7. Was wegen des Limits ungeprüft bleibt, steht in der Ausgabe unter „Nicht geprüft“.
+
 ## Das Urteil
 
 „Test-Kandidat“ nur, wenn ALLES zutrifft:
@@ -71,7 +83,8 @@ Richtung `fee_buffer_r`.
 Ohne Datei gelten: 500 € Budget, 1 € pro Kauf und 1 € pro Verkauf,
 1 € = 1,15 $, Puffer 0,10 R, Bruchstücke erlaubt (`fractional`, auf 3 Stellen) und
 darum keine Preisgrenze (`max_price_usd: null`), Ziel ab 2,2 %, frisch = 10 Minuten,
-höchstens 8 Aktien pro Lauf. Den Wechselkurs auf den des Brokers setzen.
+beim Scan bis zu 100 gründliche Prüfungen pro Lauf (`max_checks`, praktisch jeder frische Ausbruch),
+bei der Vorauswahl 8 (`max_checks_vorauswahl`). Den Wechselkurs auf den des Brokers setzen.
 
 ## Was er schreibt
 

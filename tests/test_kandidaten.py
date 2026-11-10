@@ -214,6 +214,71 @@ class Journal(unittest.TestCase):
         cfg = K.read_config(os.path.join(K.HERE, "config.example.json"))
         self.assertEqual(cfg["budget_eur"], 500.0)
 
+class Prefilter(unittest.TestCase):
+    def test_small_targets_out_and_busiest_first(self):
+        cfg = dict(K.DEFAULTS)
+        hits = [  # range 100-98, mid 99
+            {"symbol": "TINY", "price": 100.5, "or_high": 100.0, "or_low": 98.0, "dollar_volume": 9e9},   # 2 x 1.5 / 100.5 = 2.99 %
+            {"symbol": "SMALL", "price": 100.05, "or_high": 100.0, "or_low": 99.0, "dollar_volume": 9e9},  # 2 x 0.55 / 100.05 = 1.1 %
+            {"symbol": "AAA", "price": 50.0, "or_high": 49.5, "or_low": 47.0, "dollar_volume": 1e6},
+            {"symbol": "ZZZ", "price": 50.0, "or_high": 49.5, "or_low": 47.0, "dollar_volume": 5e8},
+        ]
+        small, ranked = K.prefilter(hits, cfg)
+        self.assertEqual([h["symbol"] for h in small], ["SMALL"])
+        self.assertEqual([h["symbol"] for h in ranked], ["TINY", "ZZZ", "AAA"])   # not alphabetical any more
+        self.assertAlmostEqual(K.target_pct(hits[0]), 2.985, places=2)
+
+    def test_close_calls_go_to_the_full_check(self):
+        cfg = dict(K.DEFAULTS)
+        h = {"symbol": "EDGE", "price": 100.0, "or_high": 99.0, "or_low": 97.3}   # mid 98.15 -> 3.7 %
+        self.assertEqual(K.prefilter([h], cfg)[0], [])
+        h2 = {"symbol": "EDGE", "price": 100.0, "or_high": 99.5, "or_low": 97.4}  # mid 98.45 -> 3.1 %
+        self.assertEqual(K.prefilter([h2], dict(cfg, min_target_pct=3.12))[0], [])  # 0.02 under: full check decides
+        self.assertIsNone(K.target_pct({"symbol": "X", "price": 10}))
+
+    def test_dropped_breakouts_still_get_a_plan_for_the_journal(self):
+        cfg = dict(K.DEFAULTS)
+        r = K.small_row({"symbol": "SMALL", "price": 100.05, "or_high": 100.0, "or_low": 99.0, "at": "10:00 AM"},
+                        cfg, "2026-11-10 10:01")
+        self.assertEqual((r["entry"], r["stop"], r["target"]), (100.05, 99.5, 101.15))
+        self.assertEqual(K.verdict(r, cfg, True), "raus (Ziel < 2,2 %)")
+        self.assertGreater(r["shares"], 0)
+
+
+class NewsFlags(unittest.TestCase):
+    def setUp(self):
+        self.orig = K.run_json
+        self.calls = []
+
+    def tearDown(self):
+        K.run_json = self.orig
+
+    def fake(self, fail_sizes=(), earnings=()):
+        def run(tool, args):
+            part = args[1:args.index("--hours")]
+            self.calls.append(part)
+            if len(part) in fail_sizes:
+                raise K.KError("timeout")
+            return {"items": [{"tickers": [t], "title": "%s reports third quarter results" % t} for t in part if t in earnings]}
+        K.run_json = run
+
+    def test_stops_when_enough_are_clean(self):
+        self.fake()
+        flags, _ = K.news_flags(["S%d" % i for i in range(30)], {}, chunk=10, want=8)
+        self.assertEqual(len(self.calls), 1)                      # 10 clean after the first batch
+        self.assertEqual(len(flags), 10)
+
+    def test_failed_batch_is_retried_in_halves(self):
+        self.fake(fail_sizes=(10,))
+        flags, _ = K.news_flags(["S%d" % i for i in range(10)], {}, chunk=10)
+        self.assertEqual([len(c) for c in self.calls], [10, 5, 5])
+        self.assertTrue(all(f[0] == "nein" for f in flags.values()))
+
+    def test_still_failing_is_unknown(self):
+        self.fake(fail_sizes=(10, 5))
+        flags, _ = K.news_flags(["S%d" % i for i in range(10)], {}, chunk=10)
+        self.assertTrue(all(f[0] == "?" for f in flags.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

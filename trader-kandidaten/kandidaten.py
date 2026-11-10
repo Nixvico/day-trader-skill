@@ -58,7 +58,8 @@ DEFAULTS = {
     "fractional": True,           # the broker sells fractions of a share (3 decimals)
     "min_target_pct": 2.2,
     "fresh_minutes": 10,
-    "max_checks": 8,
+    "max_checks": 100,           # scan: full checks per run (practically every fresh breakout)
+    "max_checks_vorauswahl": 8,  # kandidaten: the morning pre-selection
     "since": "09:45",
     "flat_by": "15:55",
     "workdir": "/tmp/trader-kandidaten",
@@ -111,7 +112,7 @@ def read_config(path):
         cfg[k] = float(cfg[k])
     cfg["max_price_usd"] = None if cfg["max_price_usd"] in (None, "", 0) else float(cfg["max_price_usd"])
     cfg["fractional"] = bool(cfg["fractional"])
-    for k in ("fresh_minutes", "max_checks"):
+    for k in ("fresh_minutes", "max_checks", "max_checks_vorauswahl"):
         cfg[k] = int(cfg[k])
     if cfg["eur_usd"] <= 0 or cfg["budget_eur"] <= 0:
         raise KError("budget_eur und eur_usd müssen größer als 0 sein")
@@ -358,23 +359,37 @@ EXCLUDED = {"ja": "raus (Zahlen heute/gestern)", "steht an": "raus (Zahlen stehe
             "?": "raus (News nicht abrufbar)"}
 
 
-def news_flags(symbols, names, hours=24, chunk=10):
-    """Earnings flags per ticker, asking news.py in small batches. A batch that fails
-    marks its tickers '?' (unknown), which keeps them from being a Test-Kandidat."""
+def news_flags(symbols, names, hours=24, chunk=10, want=None):
+    """Earnings flags per ticker, asking news.py in small batches, in the given order.
+
+    A batch that fails is tried once more in halves; what still fails is marked '?' (unknown),
+    which keeps it from being a Test-Kandidat. With `want`, it stops as soon as that many
+    tickers came out clean ('nein'): the rest are not asked and get no flag."""
     flags, notes = {}, []
     symbols = list(symbols)
-    for i in range(0, len(symbols), chunk):
-        part = symbols[i:i + chunk]
-        try:
-            d = run_json("news", ["--tickers"] + part + ["--hours", hours, "--dry-run"])
-        except KError as err:
-            for s in part:
-                flags[s] = ("?", "News nicht abrufbar: %s" % str(err)[-80:])
-            continue
-        items = d.get("items") or []
+
+    def ask(part):
+        d = run_json("news", ["--tickers"] + part + ["--hours", hours, "--dry-run"])
         notes.extend(d.get("notes") or [])
         for s in part:
-            flags[s] = earnings_flag(s, items, names.get(s))
+            flags[s] = earnings_flag(s, d.get("items") or [], names.get(s))
+
+    for i in range(0, len(symbols), chunk):
+        if want is not None and sum(1 for f in flags.values() if f[0] == "nein") >= want:
+            break
+        part = symbols[i:i + chunk]
+        try:
+            ask(part)
+        except KError:
+            half = max(1, len(part) // 2)
+            for sub in (part[:half], part[half:]):
+                if not sub:
+                    continue
+                try:
+                    ask(sub)
+                except KError as err:
+                    for s in sub:
+                        flags[s] = ("?", "News nicht abrufbar: %s" % str(err)[-80:])
     return flags, notes
 
 
@@ -392,6 +407,41 @@ def fresh_window(hits, scan_min, cfg, since_min, max_price):
         (fresh if scan_min - at <= cfg["fresh_minutes"] else old).append(h)
     fresh.sort(key=lambda h: minutes_of(h["at"]), reverse=True)
     return fresh, old
+
+
+def target_pct(hit):
+    """Target distance in % for the ORB plan (stop at the range middle, target 2R), from the scan alone."""
+    try:
+        e, mid = float(hit["price"]), (float(hit["or_high"]) + float(hit["or_low"])) / 2
+    except (KeyError, TypeError, ValueError):
+        return None
+    return 2 * (e - mid) / e * 100 if e > mid > 0 else 0.0
+
+
+def prefilter(fresh, cfg, slack=0.05):
+    """Cheap first pass over every fresh breakout -> (too_small, ranked).
+
+    too_small: target under min_target_pct (with a little slack; the full check decides the close calls).
+    ranked: the rest, most dollars traded first, so the limit of full checks goes to the busiest stocks."""
+    small, rest = [], []
+    for h in fresh:
+        t = target_pct(h)
+        (small if t is not None and t < cfg["min_target_pct"] - slack else rest).append(h)
+    rest.sort(key=lambda h: (-(h.get("dollar_volume") or 0), h["symbol"]))
+    return small, rest
+
+
+def small_row(hit, cfg, now_text):
+    """A planned row for a breakout the prefilter dropped (target too close), so the journal
+    can still show later whether that filter is worth it. No entry check or time machine."""
+    e = float(hit["price"])
+    mid = (float(hit["or_high"]) + float(hit["or_low"])) / 2
+    row = {"ticker": hit["symbol"], "status": "triggered", "entry": round(e, 2), "entry_time": hit.get("at"),
+           "or_high": hit["or_high"], "or_low": hit["or_low"], "stop": round(mid, 2),
+           "target": round(e + 2 * (e - mid), 2), "now": now_text, "earnings": "-", "earnings_note": "",
+           "fixed": "raus (Ziel < %s %%)" % de(cfg["min_target_pct"], 1)}
+    row.update(size_trade(row["entry"], row["stop"], row["target"], cfg))
+    return row
 
 
 def ensure_universe(wd):
@@ -511,21 +561,35 @@ def cmd_scan(a, cfg):
     since = minutes_of(a.since or cfg["since"])
     fresh, old = fresh_window(scan.get("hits") or [], scan_min, cfg, since, cfg["max_price_usd"])
     names = universe_names(os.path.join(wd, "universe.txt"))
-    syms = [h["symbol"] for h in fresh]
-    flags, notes = news_flags(syms, names)
-    keep = [s for s in syms if flags.get(s, ("nein",))[0] == "nein"][:cfg["max_checks"]]
+    small, ranked = prefilter(fresh, cfg)
+    syms = [h["symbol"] for h in ranked]
+    flags, notes = news_flags(syms, names, want=cfg["max_checks"])
+    clean = [s for s in syms if s in flags and flags[s][0] == "nein"]
+    keep = clean[:cfg["max_checks"]]
+    unchecked = [s for s in syms if s not in flags or (flags[s][0] == "nein" and s not in keep)]
     rows = check_all(keep, cfg, day, wd, flags, scan_min=scan_min, now_text=a.now)
     for s in syms:
-        if s not in keep and flags.get(s, ("nein",))[0] != "nein":
+        if s in flags and flags[s][0] != "nein":
             rows.append({"ticker": s, "status": "triggered", "earnings": flags[s][0], "earnings_note": flags[s][1],
                          "fixed": EXCLUDED.get(flags[s][0], "raus")})
+    for h in small:
+        try:
+            rows.append(small_row(h, cfg, now.strftime("%Y-%m-%d %H:%M")))
+        except (KeyError, TypeError, ValueError):
+            pass
     lines = ["Scan %s: %d Treffer, im Fenster ab %s%s: %d frisch, %d zu alt (%s)." % (
         scan.get("as_of"), len(scan.get("hits") or []), hhmm(since), price_text(cfg),
         len(fresh), len(old), " ".join(h["symbol"] for h in old) or "-")]
+    lines.append("Vorab raus, Ziel bei 2R unter %s %%: %d (%s)." % (
+        de(cfg["min_target_pct"], 1), len(small), " ".join(h["symbol"] for h in small) or "-"))
+    lines.append("Gründlich geprüft: %d, die meistgehandelten zuerst." % len(keep))
+    if unchecked:
+        lines.append("Nicht geprüft (Limit %d pro Lauf, weniger gehandelt): %d (%s)." % (
+            cfg["max_checks"], len(unchecked), " ".join(unchecked)))
     if scan.get("unconfirmed"):
         lines.append("Hinweis: %s weitere Kandidaten hat der Scanner nicht genau geprüft." % scan["unconfirmed"])
     for s in syms:
-        if flags.get(s, ("nein",))[0] != "nein":
+        if s in flags and flags[s][0] != "nein":
             lines.append("%s: Zahlen %s (%s)" % (s, flags[s][0], flags[s][1]))
     return finish(rows, cfg, "Kandidaten-Check (Scan) %s ET" % now.strftime("%Y-%m-%d %H:%M"), a, wd, lines,
                   stamp="scan-%s" % now.strftime("%H%M"))
@@ -547,9 +611,10 @@ def cmd_kandidaten(a, cfg):
     hits = [h for h in daily.get("hits") or [] if h.get("price") is not None
             and (cfg["max_price_usd"] is None or h["price"] < cfg["max_price_usd"])]
     # the daily scan lists the most traded first; news for a few more than we check, as spares
-    syms = [h["symbol"] for h in hits][:cfg["max_checks"] * 3]
+    n = cfg["max_checks_vorauswahl"]
+    syms = [h["symbol"] for h in hits][:n * 3]
     flags, notes = news_flags(syms, universe_names(uni))
-    keep = [s for s in syms if flags.get(s, ("nein",))[0] == "nein"][:cfg["max_checks"]]
+    keep = [s for s in syms if flags.get(s, ("nein",))[0] == "nein"][:n]
     rows = check_all(keep, cfg, day, wd, flags, now_text=a.now)
     gone = [s for s in syms if flags.get(s, ("nein",))[0] != "nein"]
     lines = ["Daily-Scan (%s): %d Treffer%s, die %d meistgehandelten angesehen, %d wegen Zahlen "

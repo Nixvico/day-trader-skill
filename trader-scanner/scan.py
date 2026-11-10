@@ -714,7 +714,7 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
         cands.sort(key=lambda x: -x[2])
         counts["unconfirmed"] = len(cands) - max_confirm
         cands = cands[:max_confirm]
-    for sym, bars, _ in cands:
+    for sym, bars, dollars in cands:
         full = bars
         if confirm is not None:
             try:
@@ -729,6 +729,7 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
         counts["confirmed"] += 1
         h = orb_hit(full, n_range)
         if h:
+            h["dollar_volume"] = int(round(dollars))        # price x volume so far: who trades the most
             hits.append(dict({"symbol": sym, "setups": ["orb"]}, **h))
     hits.sort(key=lambda x: (x["_t"], x["symbol"]))
     for h in hits:

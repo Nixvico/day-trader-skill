@@ -323,6 +323,7 @@ class Orb(unittest.TestCase):
         self.assertEqual(self.errors, {"SQ": "no data for SQ: No data found, symbol may be delisted"})
         self.assertEqual(counts["unusable"], 2)            # WBD (no bars), PARA (missing bars)
         tsla = [h for h in hits if h["symbol"] == "TSLA"][0]
+        self.assertGreater(tsla.pop("dollar_volume"), 0)
         self.assertEqual(tsla, {"symbol": "TSLA", "setups": ["orb"], "price": 364.18, "at": "10:15 AM",
                                 "bar_start": "10:10", "bar_index": 8, "or_high": 362.18, "or_low": 354.47,
                                 "pct_over": 0.55})
@@ -452,6 +453,7 @@ class LiveFiveMinute(unittest.TestCase):
         day, cut = scan.orb_window(self.now, None, 15, datetime.time(15, 30))
         hits, counts, failed = scan.scan_orb(self.spark, ["TSLA", "AMC"], day, cut, 15, 5, 0, lambda s: self.v8)
         # range 9:30 to 9:45: high 370.49 (the 9:30 bar), low 363.64; the 9:55 bar closed 370.585
+        self.assertGreater(hits[0].pop("dollar_volume"), 0)
         self.assertEqual(hits, [{"symbol": "TSLA", "setups": ["orb"], "price": 370.58, "at": "10:00 AM",
                                  "bar_start": "09:55", "bar_index": 5, "or_high": 370.49, "or_low": 363.64,
                                  "pct_over": 0.03}])
@@ -524,7 +526,8 @@ class Cli(unittest.TestCase):
                           "as_of": "2026-10-19 10:15 ET", "universe": 234, "scanned": 231, "source": "yahoo"})
         self.assertEqual(len(doc["hits"]), 42)
         self.assertIn({"symbol": "TSLA", "setups": ["orb"], "price": 364.18, "at": "10:15 AM", "bar_start": "10:10",
-                       "bar_index": 8, "or_high": 362.18, "or_low": 354.47, "pct_over": 0.55}, doc["hits"])
+                       "bar_index": 8, "or_high": 362.18, "or_low": 354.47, "pct_over": 0.55},
+                      [{k: v for k, v in h.items() if k != "dollar_volume"} for h in doc["hits"]])
 
         # the hits read back as a watchlist, with --at instead of --now
         code, text, _ = run(["orb", "--offline", WALL, "--at", "10:15", "--watchlist", self.wl, "--min-price", "0",
