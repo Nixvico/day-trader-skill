@@ -69,8 +69,11 @@ Exit code: 0 when at least one Test-Kandidat came out, 1 otherwise, 2 on an erro
 3. Keine eigenen Quartalszahlen gestern oder heute, und keine angekündigten.
 4. Nur bei `scan`: die Ausbruchskerze ist höchstens `fresh_minutes` (10) vor
    dem Scan geschlossen, sonst „raus (zu alt)“.
-5. Zeitmaschine: Ø R der 10.000 Durchläufe UND Ø R der echten Fälle der
-   letzten 60 Tage jeweils mindestens so groß wie die Gebühren-Hürde.
+5. Zeitmaschine: Ø R der echten Fälle der letzten 60 Tage mindestens so groß wie die
+   Gebühren-Hürde. (Die 10.000 Simulations-Durchläufe zeigen nur die Chancen auf Ziel und Stop:
+   Sie würfeln vergangene Bewegungen neu zusammen, ihr Ø R liegt darum immer nahe 0.)
+6. Regel-Check (`--regel`, von `labor.py`): Die Regel muss über alle Aktien der Liste in den
+   letzten 60 Tagen nach Gebühren im Plus sein. Ohne Regel-Check gibt es keinen Test-Kandidaten.
 
 Gebühren-Hürde = Gebühren für Kauf und Verkauf in € ÷ Risiko bis zum Stop in €
 + `fee_buffer_r`. Mit 500 € und 1 € pro Order sind das etwa 0,46 R bei 1,1 %
@@ -96,6 +99,21 @@ bei der Vorauswahl 8 (`max_checks_vorauswahl`). Den Wechselkurs auf den des Brok
   ist in `.gitignore`). In einer Cloud-Sitzung ist der Ordner nach dem Ende
   weg: das Tagebuch dann exportieren oder einen festen Pfad setzen.
 
+## Regel-Check (labor.py)
+
+```bash
+python3 trader-kandidaten/labor.py alle --out regel.json   # beide Regeln, etwa 30 Sekunden
+python3 trader-kandidaten/kandidaten.py scan --regel regel.json
+python3 trader-kandidaten/swing.py scan --regel regel.json
+```
+
+Rechnet die Regeln über die Aktien in `labor-aktien.txt` (271 große, liquide US-Werte) durch:
+Tages-Ausbruch auf 60 Tagen 5-Minuten-Kerzen mit Einstieg 10 Minuten nach dem Ausbruch (so lange
+brauchen Scan und Push), Swing auf 2 Jahren Tageskursen. Größe, 2 % Risiko und Gebühren wie im Tool.
+„OK“ nur, wenn der Durchschnitt pro Trade nach Gebühren über 0 liegt (ab 300 bzw. 150 Fällen).
+Eine einzelne Aktie hat zu wenige Fälle, um Können von Glück zu trennen; die Regel über viele Aktien
+schon eher. Die Liste enthält nur heute gelistete Firmen, das schmeichelt den Ergebnissen etwas.
+
 ## Swing (bis 10 Handelstage)
 
 ```bash
@@ -112,7 +130,8 @@ python3 trader-kandidaten/swing.py update --from offen.json --out neu.json   # o
 - Keine Swing-Trades, wenn die Firma vor höchstens 2 Tagen Zahlen gemeldet hat oder die nächsten Zahlen
   in die Haltezeit fallen könnten (letzter 10-Q/10-K bei der SEC + 91 Tage, ±10 Tage).
 - Geprüft wird jede Aktie mit ihren Tageskursen der letzten 2 Jahre (ein Trade nach dem anderen).
-  Swing-Kandidat ab 8 Fällen und Ø R nach Gebühren mindestens `fee_buffer_r`.
+  Swing-Kandidat ab 8 Fällen und Ø R nach Gebühren mindestens `fee_buffer_r`, und nur, wenn der
+  Regel-Check für Swing OK ist.
 
 Für alle Trades gilt: Verlust am Stop höchstens `max_risk_pct` (2 %) des Budgets. Ist der Stop weit
 weg, kauft das Tool weniger Stück.

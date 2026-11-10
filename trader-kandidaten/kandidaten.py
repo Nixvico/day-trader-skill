@@ -294,11 +294,32 @@ def verdict(r, cfg, fresh_required):
         return "raus (News nicht abrufbar)"
     if r.get("hurdle_r") is None:
         return "raus (Budget zu klein für 1 Aktie)"
-    if r.get("sim_r") is None or r.get("hist_r") is None:
+    if r.get("hist_r") is None:
         return "raus (Zeitmaschine ohne Ergebnis)"
-    if r["sim_r"] < r["hurdle_r"] or r["hist_r"] < r["hurdle_r"]:
+    # Only the stock's real past cases count here. The simulation (sim_r) re-draws past moves at
+    # random, so its average sits near 0 R by construction: it shows the odds, never an edge.
+    if r["hist_r"] < r["hurdle_r"]:
         return "raus (zu schwach nach Gebühren)"
+    if r.get("regel_ok") is None:
+        return "raus (Regel-Check fehlt)"
+    if not r["regel_ok"]:
+        return "raus (Regel zurzeit im Minus)"
     return "Test-Kandidat"
+
+
+def regel_gate(path, kind):
+    """(ok, reason) from a Regel-Check file written by labor.py; (None, why) without one."""
+    if not path:
+        return None, "kein Regel-Check angegeben"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            r = (json.load(fh) or {}).get(kind) or {}
+    except (OSError, ValueError):
+        return None, "Regel-Check nicht lesbar"
+    if not r.get("n"):
+        return None, "Regel-Check ohne Fälle"
+    return bool(r.get("ok")), "%s (%s € pro Trade nach Gebühren, %d Fälle)" % (
+        r.get("grund", ""), de(r.get("eur_pro_trade")), r["n"])
 
 
 def check_symbol(sym, cfg, day, wd, earnings=("nein", ""), scan_hit=None, scan_min=None, now_text=None):
@@ -509,7 +530,10 @@ def finish(rows, cfg, title, args, wd, extra_lines=(), stamp="check"):
             r["markt"] = mk["ampel"]
         extra_lines = ["Markt: Ampel %s (%s). Die Ampel ist eine Information, kein Filter." % (
             mk["ampel"].upper(), mk["grund"])] + list(extra_lines)
+    ok, why = regel_gate(getattr(args, "regel", None), "orb")
+    extra_lines = list(extra_lines) + ["Regel-Check: %s." % why]
     for r in rows:
+        r["regel_ok"] = ok
         r["verdict"] = verdict(r, cfg, fresh_required)
     tests = [r for r in rows if r["verdict"] == "Test-Kandidat"]
     doc = {"created_by": "trader-kandidaten", "mode": getattr(args, "cmd", ""), "title": title, "markt": mk,
@@ -870,6 +894,7 @@ def main(argv=None):
     def common(p):
         p.add_argument("--now", help='so tun, als wäre es diese New Yorker Zeit ("2026-11-09 10:15")')
         p.add_argument("--json", action="store_true")
+        p.add_argument("--regel", metavar="FILE", help="Regel-Check von labor.py; ohne ihn gibt es keinen Test-Kandidaten")
         p.add_argument("--journal", nargs="?", const="", metavar="PATH",
                        help="Test-Kandidaten ins Tagebuch eintragen (Pfad aus der Config, wenn leer)")
         p.add_argument("--journal-all", action="store_true", help="jeden geplanten Trade eintragen, nicht nur Test-Kandidaten")

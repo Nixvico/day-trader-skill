@@ -226,8 +226,8 @@ def _cik(sym, fetch):
 
 # ---------------------------------------------------------------- one stock tonight
 
-def check(sym, cfg, today, headline=("nein", ""), bars=None, earn=None):
-    row = {"ticker": sym, "art": "swing"}
+def check(sym, cfg, today, headline=("nein", ""), bars=None, earn=None, regel_ok=None):
+    row = {"ticker": sym, "art": "swing", "regel_ok": regel_ok}
     try:
         bars = bars or daily_bars(sym)
         # the signal day is the last finished session
@@ -279,6 +279,10 @@ def verdict(r, cfg):
         return "raus (zu wenig Fälle: %d)" % (r.get("bt_n") or 0)
     if r["bt_r_net"] is None or r["bt_r_net"] < cfg["fee_buffer_r"]:
         return "raus (zu schwach nach Gebühren)"
+    if r.get("regel_ok") is None:
+        return "raus (Regel-Check fehlt)"
+    if not r["regel_ok"]:
+        return "raus (Regel zurzeit im Minus)"
     return "Swing-Kandidat"
 
 
@@ -326,10 +330,11 @@ def cmd_scan(a, cfg):
         hits = [h for h in daily.get("hits") or [] if "breakout_20d" in (h.get("setups") or [])]
         if cfg["max_price_usd"] is not None:
             hits = [h for h in hits if h.get("price") and h["price"] < cfg["max_price_usd"]]
-        syms = [h["symbol"] for h in hits][:cfg["max_checks"] * 2]
+        syms = [h["symbol"] for h in hits][:cfg["max_checks_vorauswahl"] * 2]
     names = K.universe_names(os.path.join(wd, "universe.txt"))
     heads, _ = K.news_flags(syms, names, hours=48) if syms else ({}, [])
-    rows = [check(s, cfg, today, heads.get(s, ("nein", ""))) for s in syms]
+    regel_ok, regel_why = K.regel_gate(getattr(a, "regel", None), "swing")
+    rows = [check(s, cfg, today, heads.get(s, ("nein", "")), regel_ok=regel_ok) for s in syms]
     mk = K.market_now()
     events = []
     if a.termine and os.path.exists(a.termine):
@@ -382,6 +387,7 @@ def cmd_scan(a, cfg):
     print("Ø R netto = Durchschnitt der Regel-Trades der letzten 2 Jahre, nach Gebühren (2 € pro Trade bei %s €). "
           "Swing-Kandidat ab %d Fällen und Ø R netto mindestens %s." % (
               K.de(cfg["budget_eur"], 0), MIN_TRADES, K.de(cfg["fee_buffer_r"])))
+    print("Regel-Check (alle Aktien der Liste, 2 Jahre): %s." % regel_why)
     print("Haltezeit bis 10 Tage: Kurslücken über Nacht können den Stop überspringen. " + K.NOTE)
     if best:
         print("\nSWING-KANDIDAT: " + ", ".join("%s Kauf über %s, Stop %s, Ziel %s" % (
@@ -448,6 +454,7 @@ def main(argv=None):
     p.add_argument("--symbols", help="kommagetrennte Ticker statt des Daily-Scans")
     p.add_argument("--docs", help="Tagebuch-Dokumente (collection trades) hierhin schreiben")
     p.add_argument("--termine", help="JSON-Liste marktweiter Termine (datum, zeit, was), für einen Hinweis")
+    p.add_argument("--regel", metavar="FILE", help="Regel-Check von labor.py; ohne ihn gibt es keinen Swing-Kandidaten")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("update", help="offene Swing-Trades fortschreiben")
     p.add_argument("--from", dest="from_file", required=True, help="JSON: Dokumente (Liste oder nach id)")

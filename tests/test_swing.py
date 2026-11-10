@@ -72,7 +72,7 @@ class Rule(unittest.TestCase):
 
 class Verdict(unittest.TestCase):
     def row(self, **kw):
-        r = {"signal": True, "earnings": "nein", "hurdle_r": 0.3, "bt_n": 12, "bt_r_net": 0.2}
+        r = {"signal": True, "earnings": "nein", "hurdle_r": 0.3, "bt_n": 12, "bt_r_net": 0.2, "regel_ok": True}
         r.update(kw)
         return r
 
@@ -82,7 +82,9 @@ class Verdict(unittest.TestCase):
                          (dict(earnings="erwartet"), "raus (Zahlen in der Haltezeit)"),
                          (dict(earnings="gerade gemeldet"), "raus (Zahlen gerade gemeldet)"),
                          (dict(bt_n=5), "raus (zu wenig Fälle: 5)"),
-                         (dict(bt_r_net=0.05), "raus (zu schwach nach Gebühren)")]:
+                         (dict(bt_r_net=0.05), "raus (zu schwach nach Gebühren)"),
+                         (dict(regel_ok=False), "raus (Regel zurzeit im Minus)"),
+                         (dict(regel_ok=None), "raus (Regel-Check fehlt)")]:
             self.assertEqual(S.verdict(self.row(**kw), CFG), want, kw)
 
 

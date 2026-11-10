@@ -14,7 +14,8 @@ WHOLE = dict(CFG, fractional=False)
 
 def row(**kw):
     r = {"ticker": "TEST", "status": "triggered", "earnings": "nein", "above_high": True,
-         "target_pct": 3.0, "hurdle_r": 0.3, "sim_r": 0.4, "hist_r": 0.5, "age_min": 5}
+         "target_pct": 3.0, "hurdle_r": 0.3, "sim_r": 0.4, "hist_r": 0.5, "age_min": 5,
+         "regel_ok": True}
     r.update(kw)
     return r
 
@@ -80,9 +81,11 @@ class Verdict(unittest.TestCase):
             (dict(earnings="ja"), "raus (Zahlen heute/gestern)"),
             (dict(earnings="steht an"), "raus (Zahlen stehen an)"),
             (dict(earnings="?"), "raus (News nicht abrufbar)"),
-            (dict(sim_r=0.29), "raus (zu schwach nach Gebühren)"),
+            (dict(sim_r=-0.05), "Test-Kandidat"),           # the simulation shows odds, not an edge
             (dict(hist_r=0.1), "raus (zu schwach nach Gebühren)"),
-            (dict(sim_r=None), "raus (Zeitmaschine ohne Ergebnis)"),
+            (dict(hist_r=None), "raus (Zeitmaschine ohne Ergebnis)"),
+            (dict(regel_ok=False), "raus (Regel zurzeit im Minus)"),
+            (dict(regel_ok=None), "raus (Regel-Check fehlt)"),
             (dict(error="boom"), "raus (Fehler: boom)"),
         ]
         for kw, want in cases:
