@@ -114,6 +114,22 @@ brauchen Scan und Push), Swing auf 2 Jahren Tageskursen. Größe, 2 % Risiko und
 Eine einzelne Aktie hat zu wenige Fälle, um Können von Glück zu trennen; die Regel über viele Aktien
 schon eher. Die Liste enthält nur heute gelistete Firmen, das schmeichelt den Ergebnissen etwas.
 
+## Momentum-Blöcke (bloecke.py)
+
+```bash
+python3 trader-kandidaten/bloecke.py rangliste              # die stärksten Aktien der letzten 6 Monate
+python3 trader-kandidaten/bloecke.py tick --from b.json --out b.json   # einmal pro Tag nach Börsenschluss
+```
+
+Drei Paper-Konten mit je 500 €: **A** hält die eine stärkste Aktie, **B** die drei stärksten
+(Geld gleich verteilt), **C** den Gesamtmarkt (SPY) als Maßstab. „Stärkste“ = größter Anstieg über
+126 Handelstage unter den Aktien in `labor-aktien.txt`, die über ihrem 200-Tage-Schnitt schließen.
+Ein Block läuft 25 Handelstage (etwa 5 Wochen), gekauft und verkauft wird zum Schlusskurs, dann
+kommt der nächste Block mit der neuen Rangliste. Gebühren wie im Tool. Kein Stop: ein schlechter
+Block kann 20 % und mehr kosten. In der Rückrechnung (2022 bis 2026) lag diese Art von Rotation meist
+vor dem Halten derselben Aktien, aber mit stark schwankenden Ergebnissen und einer Aktienliste, die
+diese Strategie begünstigt. Deshalb läuft sie hier als Test nach vorn, nicht als Versprechen.
+
 ## Swing (bis 10 Handelstage)
 
 ```bash
