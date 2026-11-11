@@ -107,6 +107,7 @@ python3 trader-kandidaten/kandidaten.py scan --regel regel.json
 python3 trader-kandidaten/swing.py scan --regel regel.json
 ```
 
+Dazu der VWAP-Pullback aus dem Daytrading-Playbook (Setup A) auf NVDA, AAPL und MSFT (`labor.py vwap`).
 Rechnet die Regeln über die Aktien in `labor-aktien.txt` (271 große, liquide US-Werte) durch:
 Tages-Ausbruch auf 60 Tagen 5-Minuten-Kerzen mit Einstieg 10 Minuten nach dem Ausbruch (so lange
 brauchen Scan und Push), Swing auf 2 Jahren Tageskursen. Größe, 2 % Risiko und Gebühren wie im Tool.

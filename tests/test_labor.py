@@ -51,6 +51,36 @@ class Orb(unittest.TestCase):
         self.assertEqual(L.summarize(bad, 300)["grund"], "die Regel verliert nach Gebühren")
 
 
+def vwap_session(closes, vols):
+    """Bars from 9:30: high/low 0.2 % around each close, slot numbers attached."""
+    return [{"slot": i, "o": c, "h": c * 1.002, "l": c * 0.998, "c": c, "v": v} for i, (c, v) in enumerate(zip(closes, vols))]
+
+
+class Vwap(unittest.TestCase):
+    CFG = dict(K.DEFAULTS)
+
+    def stock(self):
+        # a steady climb, then a quiet dip that closes just above the VWAP, then a close above its high
+        base = [100 + 0.5 * i for i in range(9)]
+        vols = [1000] * 9
+        dip = base[-1]
+        for _ in range(50):                      # find a dip close 0.1 % above the VWAP including the dip itself
+            vw, _, _ = L.session_lines(vwap_session(base + [dip], vols + [300]))
+            dip = vw[-1] * 1.001
+        closes = base + [dip, dip * 1.01] + [dip * 1.01 + 0.6 * i for i in range(1, 68)]
+        return vwap_session(closes, vols + [300, 1500] + [1000] * 67)
+
+    def test_pullback_long_with_the_market(self):
+        mk = vwap_session([400 + 0.2 * i for i in range(78)], [1000] * 78)
+        out = L.vwap_trades(self.stock(), mk, self.CFG)
+        self.assertEqual(len(out), 1)
+        self.assertGreater(out[0]["net"], 0)
+
+    def test_no_trade_against_the_market(self):
+        mk = vwap_session([400 - 0.2 * i for i in range(78)], [1000] * 78)
+        self.assertEqual(L.vwap_trades(self.stock(), mk, self.CFG), [])
+
+
 class Gate(unittest.TestCase):
     def test_gate_from_file(self):
         with tempfile.TemporaryDirectory() as d:

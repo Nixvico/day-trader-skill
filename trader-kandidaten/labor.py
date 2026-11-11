@@ -3,7 +3,15 @@
 
   labor.py orb   [--days 60] [--delay 2] [--json] [--out FILE]
   labor.py swing [--range 2y] [--json] [--out FILE]
-  labor.py alle  [--json] [--out FILE]          both, one JSON document
+  labor.py vwap  [--json] [--out FILE]          the playbook's VWAP pullback on NVDA, AAPL, MSFT
+  labor.py alle  [--json] [--out FILE]          all three, one JSON document
+
+VWAP pullback (the "Daytrading-Playbook", setup A): 5-minute bars of the last 60 days, entries from
+9:40 to 11:30 New York time (15:40-17:30 in Germany). Long when the stock closes above its session
+VWAP with EMA 9 over EMA 20, the previous bar dipped to within 0.15 % of the VWAP on less volume than
+the bars before it, and the bar closes above that bar's high; short mirrored. The market (SPY) has to
+point the same way (above or under its own VWAP, EMA 9 vs 20). Stop just behind the VWAP (0.1 %),
+target 2R, flat at 15:55. At most 2 trades a day, none after 2 losses. Sized and charged like the tool.
 
 ORB: every stock in labor-aktien.txt, every session of the last 60 days (Yahoo keeps 60 days
 of 5-minute bars). The live rule: 15-minute range, the first 5-minute close above its high up
@@ -36,7 +44,8 @@ LIST = os.path.join(HERE, "labor-aktien.txt")
 OR_BARS = 3            # 15 minutes
 LAST_SIGNAL_BAR = 17   # the bar 10:55-11:00 is the last a scan (until 11:01) can see
 FLAT_BAR = 76          # 15:50-15:55 is the last bar held
-MIN_N = {"orb": 300, "swing": 150}
+MIN_N = {"orb": 300, "swing": 150, "vwap": 80}
+VWAP_SYMBOLS = ("NVDA", "AAPL", "MSFT")
 
 
 def _load(path, name):
@@ -165,6 +174,112 @@ def run_orb(cfg, syms=None, delay=2, data=None):
     return out
 
 
+# ---------------------------------------------------------------- VWAP pullback (playbook setup A)
+
+def _ema(vals, n):
+    k, out, e = 2.0 / (n + 1), [], vals[0]
+    for v in vals:
+        e = v * k + e * (1 - k)
+        out.append(e)
+    return out
+
+
+def session_lines(bars):
+    """bars: one session, oldest first -> (vwap, ema9, ema20) lists."""
+    pv = vv = 0.0
+    vw = []
+    for b in bars:
+        tp = (b["h"] + b["l"] + b["c"]) / 3
+        pv += tp * b["v"]
+        vv += b["v"]
+        vw.append(pv / vv if vv else tp)
+    c = [b["c"] for b in bars]
+    return vw, _ema(c, 9), _ema(c, 20)
+
+
+def _as_list(D):
+    return [dict(D[i], slot=i) for i in sorted(D)]
+
+
+def vwap_trades(bars, market, cfg, buf=0.001, touch=0.0015):
+    """One session of one stock (list of bars with slot) and the market's session (same form)."""
+    vw, e9, e20 = session_lines(bars)
+    mvw, m9, m20 = session_lines(market) if market else ([], [], [])
+    mslot = {b["slot"]: i for i, b in enumerate(market or [])}
+    fx, fee = cfg["eur_usd"], 2 * cfg["fee_per_order_eur"]
+    out, losses, i = [], 0, 3
+    while i < len(bars) - 1 and len(out) < 2 and losses < 2:
+        slot = bars[i]["slot"]
+        if not (2 <= slot <= 23):                 # bars closing 9:45 .. 11:30
+            i += 1
+            continue
+        mi = mslot.get(bars[i - 1]["slot"])
+        took = False
+        for up in (True, False):
+            if mi is None:
+                break
+            m_up = market[mi]["c"] > mvw[mi] and m9[mi] > m20[mi]
+            m_dn = market[mi]["c"] < mvw[mi] and m9[mi] < m20[mi]
+            if (up and not m_up) or (not up and not m_dn):
+                continue
+            p = bars[i - 1]
+            trend = (p["c"] > vw[i - 1] and e9[i - 1] > e20[i - 1]) if up else (p["c"] < vw[i - 1] and e9[i - 1] < e20[i - 1])
+            near = (p["l"] <= vw[i - 1] * (1 + touch) and p["c"] > vw[i - 1]) if up else \
+                   (p["h"] >= vw[i - 1] * (1 - touch) and p["c"] < vw[i - 1])
+            prev = [x["v"] for x in bars[max(0, i - 7):i - 1]]
+            quiet = bool(prev) and p["v"] < sum(prev) / len(prev)
+            confirm = bars[i]["c"] > p["h"] if up else bars[i]["c"] < p["l"]
+            if not (trend and near and quiet and confirm):
+                continue
+            e = bars[i]["c"]
+            stop = vw[i] * (1 - buf) if up else vw[i] * (1 + buf)
+            rps = (e - stop) if up else (stop - e)
+            if rps <= 0:
+                continue
+            tgt = e + 2 * rps if up else e - 2 * rps
+            sh = min(cfg["budget_eur"] * fx / e, cfg["budget_eur"] * cfg["max_risk_pct"] / 100.0 * fx / rps)
+            ex, j = None, i + 1
+            while j < len(bars) and bars[j]["slot"] < FLAT_BAR:
+                x = bars[j]
+                if (x["l"] <= stop) if up else (x["h"] >= stop):
+                    ex = stop
+                    break
+                if (x["h"] >= tgt) if up else (x["l"] <= tgt):
+                    ex = tgt
+                    break
+                j += 1
+            if ex is None:
+                ex = bars[min(j, len(bars) - 1)]["c"]
+            gross = sh * ((ex - e) if up else (e - ex)) / fx
+            net = gross - fee
+            out.append({"gross": gross, "net": net, "r": net / (sh * rps / fx)})
+            losses += net < 0
+            i = j
+            took = True
+            break
+        if not took:
+            i += 1
+    return out
+
+
+def run_vwap(cfg, syms=VWAP_SYMBOLS, data=None):
+    data = data or fetch_all(list(syms) + ["SPY"], "60d", "5m")
+    mk = {d: _as_list(D) for d, D in sessions(data.get("SPY") or [])}
+    trades, dates = [], set()
+    for s in syms:
+        for d, D in sessions(data.get(s) or []):
+            for t in vwap_trades(_as_list(D), mk.get(d), cfg):
+                t["d"] = d
+                trades.append(t)
+                dates.add(d)
+    last20 = set(sorted(dates)[-20:])
+    out = summarize(trades, MIN_N["vwap"], [t for t in trades if t["d"] in last20])
+    out.update({"aktien": len(syms), "tage": len(dates),
+                "regel": "Playbook Setup A: VWAP-Pullback auf %s, 15:40-17:30 Uhr, Stop hinter dem VWAP, Ziel 2:1, "
+                         "Markt in dieselbe Richtung, höchstens 2 Trades am Tag" % ", ".join(syms)})
+    return out
+
+
 # ---------------------------------------------------------------- swing
 
 def run_swing(cfg, syms=None, rng="2y", data=None):
@@ -200,7 +315,7 @@ def run_swing(cfg, syms=None, rng="2y", data=None):
 
 def text(doc):
     lines = ["Regel-Check %s (500 €-Rechnung, Gebühren und 2 %% Risiko wie im Tool)" % doc["stand"]]
-    for key, name in (("orb", "Tages-Ausbruch"), ("swing", "Swing")):
+    for key, name in (("orb", "Tages-Ausbruch"), ("swing", "Swing"), ("vwap", "VWAP-Pullback (Playbook)")):
         r = doc.get(key)
         if not r:
             continue
@@ -219,7 +334,7 @@ def text(doc):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd")
-    for name in ("orb", "swing", "alle"):
+    for name in ("orb", "swing", "vwap", "alle"):
         p = sub.add_parser(name)
         p.add_argument("--json", action="store_true")
         p.add_argument("--out")
@@ -236,6 +351,8 @@ def main(argv=None):
         doc["orb"] = run_orb(cfg, delay=a.delay)
     if a.cmd in ("swing", "alle"):
         doc["swing"] = run_swing(cfg, rng=a.range)
+    if a.cmd in ("vwap", "alle"):
+        doc["vwap"] = run_vwap(cfg)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, ensure_ascii=False, indent=1)
