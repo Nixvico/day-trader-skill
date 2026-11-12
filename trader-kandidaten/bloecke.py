@@ -8,6 +8,7 @@ Three paper variants run side by side, each with its own 500 EUR:
   A  the one strongest stock
   B  the three strongest stocks, money split evenly
   C  the whole market (SPY), bought once and held: the yardstick
+  D  your own idea, bought once and held (now: NVIDIA, from the close of 11.11.2026)
 
 "Strongest" = the biggest rise over the last 126 trading days (about six months) among the
 stocks in labor-aktien.txt that close above their 200-day average. A block is bought at a
@@ -36,9 +37,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BLOCK_DAYS = 25
 LOOKBACK = 126
 TREND = 200
-VARIANTS = {"A": {"name": "1 stärkste Aktie", "top": 1}, "B": {"name": "3 stärkste Aktien", "top": 3},
-            "C": {"name": "Markt halten (SPY)", "top": 0}}
 MARKET = "SPY"
+# A and B rotate every block; C and D buy once and hold (the yardstick and your own idea)
+VARIANTS = {"A": {"name": "1 stärkste Aktie", "top": 1}, "B": {"name": "3 stärkste Aktien", "top": 3},
+            "C": {"name": "Markt halten (SPY)", "top": 0, "halten": [MARKET]},
+            "D": {"name": "Idee: NVIDIA halten", "top": 0, "halten": ["NVDA"]}}
 
 
 def _load(path, name):
@@ -167,14 +170,15 @@ def tick(state, data, day, cfg):
     fx = cfg["eur_usd"]
     news = []
     rank = None
-    for key in ("A", "B", "C"):
+    for key in VARIANTS:
         v = state.get(key) or new_variant(key, cfg)
         state[key] = v
-        if key == "C":
+        hold = VARIANTS[key].get("halten")
+        if hold:
             if not v["positionen"]:
-                buy(v, [MARKET], data, day, cfg)
+                buy(v, hold, data, day, cfg)
                 v["block_nr"], v["block_start"] = 1, day.isoformat()
-                news.append("NEUER BLOCK C: Markt (SPY) gekauft, wird gehalten.")
+                news.append("START %s (%s): %s gekauft, wird gehalten." % (key, v["name"], ", ".join(hold)))
         else:
             start = datetime.date.fromisoformat(v["block_start"]) if v["block_start"] else None
             due = start is None or trading_days_between(data, start, day) >= BLOCK_DAYS
@@ -201,7 +205,7 @@ def tick(state, data, day, cfg):
         v["wert_eur"] = round(value(v, data, day, fx), 2)
         v["rendite_pct"] = round((v["wert_eur"] / v["start_eur"] - 1) * 100, 2)
         v["stand"] = day.isoformat()
-        if v["block_start"] and key != "C":
+        if v["block_start"] and not hold:
             v["tage_im_block"] = trading_days_between(data, datetime.date.fromisoformat(v["block_start"]), day)
         for p in v["positionen"]:
             px = close_on(data, p["ticker"], day)
@@ -246,7 +250,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         cfg = K.read_config(a.config)
-        syms = L.symbols() + [MARKET]
+        syms = sorted(set(L.symbols() + [MARKET] + [t for v in VARIANTS.values() for t in v.get("halten", [])]))
         data = fetch(syms)
         day = datetime.date.fromisoformat(a.asof) if getattr(a, "asof", None) else last_session(data)
         if a.cmd == "rangliste":
@@ -265,7 +269,7 @@ def main(argv=None):
             print(json.dumps(state, ensure_ascii=False, indent=1))
             return 0
         print("Momentum-Blöcke, Stand %s (Schlusskurse). Je 500 € Startkapital, Gebühren wie im Tool." % day.strftime("%d.%m.%Y"))
-        for key in ("A", "B", "C"):
+        for key in VARIANTS:
             v = state[key]
             print("%s %-20s %s €  (%+.1f %%)  %s" % (key, v["name"], K.de(v["wert_eur"]), v["rendite_pct"],
                   ", ".join("%s %+.1f %%" % (p["ticker"], p.get("pct", 0)) for p in v["positionen"])))

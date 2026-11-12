@@ -129,6 +129,8 @@ class Tendency(unittest.TestCase):
         self.assertEqual(M.tone("TEN Holdings Announces Pricing of $2.0 Million Registered Direct Offering")[0], -2)
         self.assertEqual(M.tone("Revenue falls short of expectations")[0], -2)     # not also "Kurs fällt"
         self.assertEqual(M.tone("Energizer declares quarterly dividend")[0], 0)
+        self.assertEqual(M.tone("Nvidia Stock Is Tumbling")[0], -1)
+        self.assertEqual(M.tone("Nvidia Dives As It Mulls Ousting CEO")[0], -1)
 
     def test_headline_tickers(self):
         self.assertEqual(M.headline_tickers("As Nvidia's stock falls, AMD gains"), {"NVDA", "AMD"})
@@ -150,6 +152,42 @@ class Tendency(unittest.TestCase):
         self.assertEqual(rows["NVDA"]["tendenz"], -2)
         self.assertTrue(rows["HLT"]["offen"])
         self.assertEqual(M.affected(r)[0]["ticker"], "BAD")
+
+
+GN = """<rss><channel>
+<item><title>Nvidia stock tumbles as board weighs CEO future - Reuters</title><link>https://n/1</link>
+<pubDate>Mon, 9 Nov 2026 22:00:00 +0000</pubDate></item>
+<item><title>Old story - CNBC</title><link>https://n/2</link><pubDate>Mon, 2 Nov 2026 22:00:00 +0000</pubDate></item>
+</channel></rss>"""
+
+
+class Feed(unittest.TestCase):
+    NOW = datetime.datetime(2026, 11, 9, 23, 0)
+
+    def test_collect_and_merge(self):
+        def get(u):
+            if "q=NVDA" in u:
+                return GN
+            if "prnewswire" in u:
+                return PRN
+            return "<rss></rss>"
+        items = M.collect_feed(["NVDA"], self.NOW, get=get)
+        nv = [i for i in items if i["art"] == "aktie"]
+        self.assertEqual(len(nv), 1)                                   # the old story is too old
+        self.assertEqual((nv[0]["quelle"], nv[0]["tickers"]), ("Reuters", ["NVDA"]))
+        self.assertLess(nv[0]["tendenz"], 0)
+        self.assertEqual([i["tickers"] for i in items if i["art"] == "pressemitteilung"], [["STI"], ["WID"]])   # no law firm
+        merged = M.merge_feed(items, items, self.NOW)
+        self.assertEqual(len(merged), len(items))                      # no doubles
+        self.assertEqual(merged, sorted(merged, key=lambda i: i["t"], reverse=True))
+
+    def test_watch_list_from_blocks(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "b.json")
+            with open(p, "w") as fh:
+                json.dump({"A": {"positionen": [{"ticker": "MRNA"}]}, "C": {"positionen": [{"ticker": "SPY"}]}}, fh)
+            self.assertEqual(M.watch_tickers(["NVDA", "mrna"], p), ["NVDA", "MRNA"])
 
 
 class Dates(unittest.TestCase):

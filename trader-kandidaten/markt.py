@@ -393,8 +393,8 @@ TONE = [
     (+1, "Dividende erhöht", re.compile(r"(raises|increases|boosts) (its )?(quarterly )?dividend|dividend increase", re.I)),
     (+1, "Auftrag / Partnerschaft", re.compile(r"\b(awarded|wins|secures|signs)\b.*\b(contract|agreement|order|deal)\b|partnership with|multi-year (agreement|contract|deal)", re.I)),
     (+1, "Hochstufung", re.compile(r"\bupgrade[sd]?\b", re.I)),
-    (+1, "Kurs steigt", re.compile(r"\b(surges?|soars?|jumps?|rall(y|ies)|climbs?|spikes?)\b", re.I)),
-    (-1, "Kurs fällt", re.compile(r"\b(falls?(?! short)|drops?|slides?|slumps?|tumbles?|sinks?|plunges?|stock falls)\b", re.I)),
+    (+1, "Kurs steigt", re.compile(r"\b(surg(es?|ing)|soar(s|ing)?|jump(s|ing)?|rall(y|ies|ying)|climb(s|ing)?|spik(es?|ing))\b", re.I)),
+    (-1, "Kurs fällt", re.compile(r"\b(falls?(?! short)|falling|drops?|dropping|slid(es?|ing)|slump(s|ing)?|tumbl(es?|ing)|sink(s|ing)?|plung(es?|ing)|dives?|diving|tanks?|tanking)\b", re.I)),
     (-1, "Herabstufung", re.compile(r"\bdowngrade[sd]?\b", re.I)),
     (-1, "Chef geht", re.compile(r"\b(resigns?|steps? down|departure of|to depart)\b", re.I)),
     (-1, "Skandal / Rückruf / Ermittlung", re.compile(r"\brecall\b|subpoena|\bprobe\b|investigation by|scandal", re.I)),
@@ -524,6 +524,80 @@ def upcoming(events, today, days=14):
     return sorted(out, key=lambda e: (e["datum"], e.get("zeit", "")))
 
 
+# ---------------------------------------------------------------- news feed
+
+GOOGLE_TICKER = "https://news.google.com/rss/search?q=%s+stock&hl=en-US&gl=US&ceid=US:en"
+FEED_KEEP = 200
+FEED_DAYS = 4
+
+
+def _feed_item(i, quelle, art, extra_tickers=()):
+    title = i["title"]
+    src = quelle
+    m = re.match(r"^(.*) - ([^-]{2,40})$", title)          # Google News: "Title - Source"
+    if quelle == "Google News" and m:
+        title, src = m.group(1).strip(), m.group(2).strip()
+    tks = sorted(set(headline_tickers(title + " " + i.get("text", "")[:200])) | set(extra_tickers))
+    pts, why = tone(title)
+    return {"id": (i.get("link") or title)[:300], "t": i["time"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "zeit": E.to_eastern(i["time"]).strftime("%d.%m. %H:%M"), "quelle": src, "art": art,
+            "titel": title[:220], "link": i.get("link", ""), "tickers": tks, "tendenz": pts, "gruende": why}
+
+
+def collect_feed(tickers, now, get=None, hours=36):
+    """Fresh items from all free sources: market headlines, the tickers you watch, press releases, the Fed."""
+    get = get or (lambda u: _get_as(u, BROWSER))
+    out = []
+
+    def pull(url, quelle, art, extra=(), limit=25, keep=None):
+        try:
+            items = _fresh(rss_items(get(url)), hours * 60, now)
+        except Exception:
+            return
+        for i in items[:limit]:
+            it = _feed_item(i, quelle, art, extra)
+            if keep is None or keep(it, i):
+                out.append(it)
+
+    pull(FEEDS["marketwatch"], "MarketWatch", "markt")
+    pull(FEEDS["googlenews"], "Google News", "markt")
+    for t in tickers:
+        pull(GOOGLE_TICKER % t, "Google News", "aktie", extra=(t,), limit=12)
+    for src, name in (("businesswire", "Business Wire"), ("prnewswire", "PR Newswire")):
+        pull(FEEDS[src], name, "pressemitteilung", limit=40,
+             keep=lambda it, i: not SPAM.search(i["title"]) and (set(EXCHANGE_TICKER.findall(i["title"] + " " + i.get("text", "")))
+                                                                  and (it["tendenz"] or _kind(i["title"]))))
+    pull(FEEDS["fed"], "Fed", "fed", limit=5)
+    return out
+
+
+def merge_feed(old, new, now, keep=FEED_KEEP, days=FEED_DAYS):
+    """Old and new items by id, newest first, nothing older than `days`."""
+    by = {}
+    for it in (old or []) + (new or []):
+        by[it["id"]] = it
+    cut = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items = [it for it in by.values() if it["t"] >= cut]
+    items.sort(key=lambda it: it["t"], reverse=True)
+    return items[:keep]
+
+
+def watch_tickers(tickers=None, bloecke_file=None):
+    out = [t.strip().upper() for t in (tickers or []) if t.strip()]
+    if bloecke_file and os.path.exists(bloecke_file):
+        with open(bloecke_file, encoding="utf-8") as fh:
+            st = json.load(fh) or {}
+        for v in st.values():
+            for p in (v or {}).get("positionen", []):
+                if p.get("ticker") and p["ticker"] != "SPY":
+                    out.append(p["ticker"].upper())
+    seen = []
+    for t in out:
+        if t not in seen:
+            seen.append(t)
+    return seen[:10]
+
+
 # ---------------------------------------------------------------- commands
 
 def main(argv=None):
@@ -535,6 +609,12 @@ def main(argv=None):
     p.add_argument("--tickers", nargs="*", help="nur diese Ticker")
     p.add_argument("--alle", action="store_true", help="auch weniger wichtige 8-K-Punkte")
     p.add_argument("--nur-sec", action="store_true", help="nur SEC und Handelsstopps, ohne die übrigen Quellen")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("feed", help="News-Feed fortschreiben: Schlagzeilen, eure Aktien, Pressemitteilungen, Fed")
+    p.add_argument("--from", dest="from_file", help="bisheriger Feed (JSON mit items)")
+    p.add_argument("--tickers", default="NVDA", help="kommagetrennt, z. B. NVDA,AAPL")
+    p.add_argument("--bloecke", help="Zustand der Momentum-Blöcke: deren Aktien kommen dazu")
+    p.add_argument("--out")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("termine")
     p.add_argument("--from", dest="from_file", required=True)
@@ -554,6 +634,27 @@ def main(argv=None):
                 top, flop = s["branchen"][:3], s["branchen"][-3:]
                 print("Stark: " + ", ".join("%s %s %%" % (b["branche"], K.de(b["heute_pct"])) for b in top))
                 print("Schwach: " + ", ".join("%s %s %%" % (b["branche"], K.de(b["heute_pct"])) for b in flop))
+            return 0
+        if a.cmd == "feed":
+            now = E.utc_now()
+            old = []
+            if a.from_file and os.path.exists(a.from_file):
+                with open(a.from_file, encoding="utf-8") as fh:
+                    old = (json.load(fh) or {}).get("items", [])
+            tks = watch_tickers(a.tickers.split(","), a.bloecke)
+            items = merge_feed(old, collect_feed(tks, now), now)
+            doc = {"stand": E.to_eastern(now).strftime("%Y-%m-%d %H:%M ET"), "tickers": tks, "items": items}
+            if a.out:
+                with open(a.out, "w", encoding="utf-8") as fh:
+                    json.dump(doc, fh, ensure_ascii=False)
+            if a.json:
+                print(json.dumps(doc, indent=1, ensure_ascii=False))
+                return 0
+            fresh = len([i for i in items if i["id"] not in {o["id"] for o in old}])
+            print("News-Feed %s: %d Meldungen, %d neu. Eure Aktien: %s" % (doc["stand"], len(items), fresh, ", ".join(tks)))
+            for i in items[:15]:
+                arrow = ("↑" * i["tendenz"]) if i["tendenz"] > 0 else ("↓" * -i["tendenz"]) if i["tendenz"] < 0 else " "
+                print("  %s %-3s %-12s %s" % (i["zeit"], arrow, i["quelle"][:12], i["titel"][:95]))
             return 0
         if a.cmd == "radar":
             r = radar(a.minutes, a.tickers, not a.alle, extra=not a.nur_sec)

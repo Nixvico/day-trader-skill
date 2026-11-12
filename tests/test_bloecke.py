@@ -20,7 +20,7 @@ def series(start_px, step, n=260, start=datetime.date(2025, 1, 1)):
 
 
 def data():
-    return {"SPY": series(500, 1.0005), "FAST": series(10, 1.004), "MID": series(10, 1.002),
+    return {"SPY": series(500, 1.0005), "NVDA": series(170, 1.0007), "FAST": series(10, 1.004), "MID": series(10, 1.002),
             "SLOW": series(10, 1.001), "DOWN": series(10, 0.999)}
 
 
@@ -29,7 +29,7 @@ class Ranking(unittest.TestCase):
         d = data()
         day = d["SPY"][-1]["d"]
         r = [s for _, s, _ in B.ranking(d, day)]
-        self.assertEqual(r, ["FAST", "MID", "SLOW"])          # DOWN is under its 200-day average, SPY excluded
+        self.assertEqual(r, ["FAST", "MID", "SLOW", "NVDA"])  # DOWN is under its 200-day average, SPY excluded
 
 
 class Tick(unittest.TestCase):
@@ -41,7 +41,8 @@ class Tick(unittest.TestCase):
         self.assertEqual([p["ticker"] for p in state["A"]["positionen"]], ["FAST"])
         self.assertEqual([p["ticker"] for p in state["B"]["positionen"]], ["FAST", "MID", "SLOW"])
         self.assertEqual([p["ticker"] for p in state["C"]["positionen"]], ["SPY"])
-        self.assertEqual(len(news), 3)
+        self.assertEqual(len(news), 4)
+        self.assertEqual([p["ticker"] for p in state["D"]["positionen"]], ["NVDA"])
         self.assertAlmostEqual(state["B"]["gebuehren_eur"], 3.0)
         self.assertAlmostEqual(state["A"]["wert_eur"], 499.0, places=1)    # 1 EUR to buy
         # 24 sessions later: still the same block
